@@ -5,6 +5,19 @@ pub trait Bus {
     fn read(&mut self, addr: u16) -> u8;
     fn write(&mut self, addr: u16, val: u8);
 
+    /// The byte the CPU executes when it fetches an *opcode* (an M1 cycle) at
+    /// `addr`: the instruction byte and the CB/ED/DD/FD prefix and sub-opcode
+    /// bytes, never an operand or a data read. Defaults to `read`, which is
+    /// what nearly every machine wants. A machine whose hardware treats an
+    /// opcode fetch differently from a data read overrides it: the ZX81's
+    /// video circuit, for one, turns a fetch at 0x8000 and above into a NOP
+    /// (and shows the byte as a character) when bit 6 of the byte is clear.
+    /// Only the Z80 core calls it; the 6502 core never does.
+    #[inline]
+    fn fetch_opcode(&mut self, addr: u16) -> u8 {
+        self.read(addr)
+    }
+
     /// Defaulted (unlike `read`/`write`): a genuinely optional concept, not a
     /// universal CPU-bus feature. Z80-family buses have a real IO port space
     /// and always override both -- every existing impl in this codebase

@@ -216,7 +216,7 @@ impl Cpu {
         let delay = bus.contend_memory(addr);
         self.pending_cycles += delay;
         bus.advance_tstates(delay + 4);
-        bus.read(addr)
+        bus.fetch_opcode(addr)
     }
 
     /// Contended-memory-aware operand/data read (base cost 3 T-states) --
@@ -592,6 +592,52 @@ impl Cpu {
 mod tests {
     use super::*;
     use crate::test_support::FlatBus;
+
+    /// A bus whose opcode fetches at `0x8000` and above run as NOPs when bit 6 of the byte is clear, as the ZX81's
+    /// video circuit does; data reads and operands are untouched.
+    struct EchoBus(FlatBus);
+
+    impl Bus for EchoBus {
+        fn read(&mut self, addr: u16) -> u8 {
+            self.0.read(addr)
+        }
+        fn write(&mut self, addr: u16, val: u8) {
+            self.0.write(addr, val);
+        }
+        fn fetch_opcode(&mut self, addr: u16) -> u8 {
+            let byte = self.read(addr);
+            if addr >= 0x8000 && byte & 0x40 == 0 {
+                0x00
+            } else {
+                byte
+            }
+        }
+    }
+
+    #[test]
+    fn fetch_opcode_changes_what_runs_but_not_operands_or_data_reads() {
+        let mut bus = EchoBus(FlatBus::new());
+        // 0x8000: INC A, INC A, ADD A,0x11, LD A,(HL), HALT. Opcodes 0x3C (INC A) have bit 6 clear and become
+        // NOPs; 0xC6 (ADD A,n), 0x7E (LD A,(HL)) and 0x76 (HALT) have it set and run.
+        for (i, b) in [0x3C, 0x3C, 0xC6, 0x11, 0x7E, 0x76].iter().enumerate() {
+            bus.write(0x8000 + i as u16, *b);
+        }
+        let mut cpu = Cpu::new();
+        cpu.pc = 0x8000;
+        cpu.hl = 0x8000;
+
+        cpu.step(&mut bus);
+        cpu.step(&mut bus);
+        assert_eq!(cpu.af >> 8, 0, "INC A fetched at 0x8000 ran as a NOP");
+        // The operand 0x11 has bit 6 clear: read as data it is 0x11, fetched as an opcode it would be a NOP.
+        cpu.step(&mut bus);
+        assert_eq!(cpu.af >> 8, 0x11, "an operand is not an opcode fetch");
+        // A data read of the byte at 0x8000 sees the real 0x3C, not the NOP's 0x00.
+        cpu.step(&mut bus);
+        assert_eq!(cpu.af >> 8, 0x3C, "a data read is not an opcode fetch");
+        cpu.step(&mut bus);
+        assert!(cpu.halted, "0x76 has bit 6 set: a real HALT");
+    }
 
     #[test]
     fn registers_reports_ordered_name_value_pairs() {
