@@ -1,0 +1,2093 @@
+; 
+
+;-------------------------------------------------------------------------
+
+                .if TARGET=="acorn"
+                .include "./submodules/beeb/include/beeb.s65"
+                .endif
+                
+                .include "lib.s65"
+                
+STEP=$1
+
+                ; empty list means run all tests.
+tests_to_run=[]
+
+should_run_test: .sfunction name,len(tests_to_run)==0||name in tests_to_run
+                
+                
+;-------------------------------------------------------------------------
+
+State: .struct
+a:
+                .fill 1
+x:
+                .fill 1
+y:
+                .fill 1
+s:
+                .fill 1
+p:
+                .fill 1
+operand:
+                .fill 1
+                .endstruct
+
+Test: .macro exec,index,simulate,next,name
+                .word \exec
+                .byte \index
+                .word \simulate
+                .word \next
+                .text \name,0
+                .endmacro
+                
+;-------------------------------------------------------------------------
+
+Index: .block
+none=0
+x=1
+y=2
+                .endblock
+                
+P: .block
+N=$80
+V=$40
+U=$20
+B=$10
+D=$08
+I=$04
+Z=$02
+C=$01
+                .endblock
+
+simulate_p: .macro mask
+                .if \mask==0
+                lda input_state.p
+                sta simulated_state.p
+                .elsif \mask==255
+                php
+                pla
+                sta simulated_state.p
+                .else
+                php
+                lda input_state.p
+                and #(\mask)^$ff
+                sta simulated_state.p
+                pla
+                and #\mask
+                ora simulated_state.p
+                sta simulated_state.p
+                .endif
+                .endmacro
+
+simulate_update_p: .macro mask
+                php
+                lda simulated_state.p
+                and #(\mask)^$ff
+                sta simulated_state.p
+                pla
+                and #\mask
+                ora simulated_state.p
+                sta simulated_state.p
+                .endmacro
+
+simulate_s: .macro
+                lda input_state.s
+                sta simulated_state.s
+                .endmacro
+                
+simulate_y: .macro
+                lda input_state.y
+                sta simulated_state.y
+                .endmacro
+                
+simulate_x: .macro
+                lda input_state.x
+                sta simulated_state.x
+                .endmacro
+
+simulate_a: .macro
+                lda input_state.a
+                sta simulated_state.a
+                .endmacro
+
+simulate_operand: .macro
+                lda input_state.operand
+                sta simulated_state.operand
+                .endmacro
+
+step_value: .macro reg
+                .if STEP==1
+                inc \reg
+                .else
+                clc
+                lda \reg
+                adc #STEP
+                sta \reg
+                .endif
+                .endmacro
+                
+
+;-------------------------------------------------------------------------
+
+*=$60
+                .dsection zp_bss
+                .dsection zp_lib
+                .cerror *>$90,'zp overflow'
+
+                ; start high to accommodate *SPOOL + ADFS
+*=$2000
+                .dsection code
+                .dsection code_lib
+                .cerror *>$7c00,'code overflow'
+                
+;-------------------------------------------------------------------------
+
+                .section zp_bss
+                ; input for instruction
+input_state: .dstruct State
+
+                ; result of executing the instruction.
+                ; output_state.operand is pre-filled with
+                ; input_state.operand, to accommodate read
+                ; instructions.
+output_state: .dstruct State
+
+                ; result of simulating the instruction.
+                ; simulated_state.operand is not initialized.
+simulated_state: .dstruct State
+
+                ; always points to output_state.operand.
+output_operand_ptr: .fill 2
+test_ptr: .fill 2
+any_bad: .fill 1
+exec_routine: .fill 2
+index_type: .fill 1
+
+                ; when bit 7 set, show fancy(ish) progress display.
+                ; Inhibited when *SPOOLing.
+show_progress: .fill 1
+
+                ; working data for BCD arithmetic
+bcd_ah: .fill 1
+bcd_al: .fill 1
+
+                ; bit 7 set if CMOS CPU
+is_cmos: .fill 1
+                .endsection zp_bss
+
+;-------------------------------------------------------------------------
+
+                .section code
+
+;-------------------------------------------------------------------------
+
+start_tests:
+                jmp start
+                .cerror *-start_tests!=3,""
+
+                .if TARGET=="generic"
+                
+start_callback:
+                rts
+                .fill 7
+                .cerror *-start_callback!=8,""
+test_begin_callback:
+                sec
+                rts
+                .fill 6
+                .cerror *-test_begin_callback!=8,""
+test_fail_callback:
+                sec
+                rts
+                .fill 6
+                .cerror *-test_fail_callback!=8,""
+test_pass_callback:
+                rts
+                .fill 7
+                .cerror *-test_pass_callback!=8,""
+test_end_callback:
+                rts
+                .fill 7
+                .cerror *-test_end_callback!=8,""
+finish_callback:
+                jmp finish_callback
+                .fill 5
+                .cerror *-finish_callback!=8,""
+print_char:
+                rts
+                .fill 7
+                .cerror *-print_char!=8,""
+                
+                .elsif TARGET=="acorn"
+
+start_callback:
+                lda #199        ;read *SPOOL file handle (AUG p204)
+                jsr osbyte_x00_yff
+                cpx #0
+                beq +
+                asl show_progress
++
+
+                lda #252        ;current language ROM (AUG p243)
+                jsr osbyte_x00_yff
+                stx old_language_rom
+                rts
+
+osbyte_x00_yff:
+                ldx #$00
+                ldy #$ff
+                jmp osbyte
+
+test_begin_callback:
+test_fail_callback:
+                sec
+test_end_callback:
+test_pass_callback:
+                rts
+
+print_char:
+                jmp oswrch
+
+finish_callback:
+                lda #142        ;enter language ROM (AUG p166)
+                ldx old_language_rom
+                jmp osbyte
+
+old_language_rom: .fill 1
+                .else
+
+                .error "unknown build target"
+
+                .endif
+                
+;-------------------------------------------------------------------------
+
+start:
+                lda $fffe
+                sta $fffe
+
+                ldx #$ff
+                txs
+
+                jsr is_65c02
+                stx is_cmos
+                
+                lda #$80
+                sta show_progress
+
+                jsr start_callback
+                
+                bit is_cmos
+                bpl prepare_nmos_tests
+
+prepare_cmos_tests:
+                lda #<cmos_tests
+                sta test_ptr+0
+                lda #>cmos_tests
+                sta test_ptr+1
+                jmp run_instruction_test_loop
+
+prepare_nmos_tests:
+                lda #<nmos_tests
+                sta test_ptr+0
+                lda #>nmos_tests
+                sta test_ptr+1
+
+run_instruction_test_loop:
+                ldy #0
+                lda (test_ptr),y
+                iny
+                ora (test_ptr),y
+                beq all_tests_done
+
+                ldy #0
+
+                ; fix up exec routine
+                lda (test_ptr),y
+                iny
+                sta jmp_exec+1
+                sta exec_routine+0
+                
+                lda (test_ptr),y
+                iny
+                sta jmp_exec+2
+                sta exec_routine+1
+
+                lda (test_ptr),y
+                iny
+                sta index_type
+
+                ; fix up simulate routine
+                lda (test_ptr),y
+                iny
+                sta jsr_simulate+1
+                
+                lda (test_ptr),y
+                iny
+                sta jsr_simulate+2
+
+                ; fix up next_state routine
+                lda (test_ptr),y
+                iny
+                sta jmp_next_state+1
+
+                lda (test_ptr),y
+                iny
+                sta jmp_next_state+2
+
+                ; call callback, since the address of the name is to
+                ; hand
+                tya
+                pha
+
+                clc
+                tya
+                adc test_ptr+0
+                tax
+
+                lda test_ptr+1
+                adc #0
+                tay
+
+                jsr test_begin_callback
+
+                pla
+                tay
+
+                php
+
+                ; print name
+-
+                lda (test_ptr),y
+                iny
+                cmp #0
+                beq +
+                jsr print_char
+                jmp -
++
+
+                clc
+                tya
+                adc test_ptr+0
+                sta test_ptr+0
+                bcc +
+                inc test_ptr+1
++
+
+                plp
+                bcc skip_test
+
+                ; initialise output_operand_ptr
+                lda #<output_state.operand
+                sta output_operand_ptr+0
+                lda #>output_state.operand
+                sta output_operand_ptr+1
+
+                ; initialise state
+                lda #0
+                sta any_bad
+                sta input_state.operand
+                sta input_state.a
+                sta input_state.x
+                sta input_state.y
+                php
+                pla
+                sta input_state.p
+                
+                lda #$ff
+                sta input_state.s
+
+test_one_state_loop:
+                lda input_state.operand
+                sta output_state.operand
+                
+                ldx input_state.s
+                txs
+                lda input_state.p
+                pha
+                ldy input_state.y
+                ldx input_state.x
+                lda input_state.a
+                plp
+jmp_exec:
+                jmp jmp_exec
+exec_done:
+                php
+                sta output_state.a
+                stx output_state.x
+                sty output_state.y
+                pla
+                sta output_state.p
+                tsx
+                stx output_state.s
+
+                ldx #$ff
+                txs
+
+                cld
+                cli
+
+jsr_simulate:
+                jsr jsr_simulate
+
+                lda simulated_state.a
+                cmp output_state.a
+                bne bad
+
+                lda simulated_state.x
+                cmp output_state.x
+                bne bad
+
+                lda simulated_state.y
+                cmp output_state.y
+                bne bad
+
+                lda simulated_state.p
+                cmp output_state.p
+                bne bad
+
+                lda simulated_state.s
+                cmp output_state.s
+                bne bad
+
+                lda simulated_state.operand
+                cmp output_state.operand
+                bne bad
+
+jmp_next_state:
+                jmp jmp_next_state
+
+bad:
+                bit any_bad
+                bmi +
+
+                jsr print_crlf
+                
++
+                lda #$80
+                sta any_bad
+
+                ldx #<input_state
+                ldy #>input_state
+                jsr test_fail_callback
+                
+                jsr print_states
++
+                jmp jmp_next_state
+                ; ...
+
+instruction_test_done:
+                lda $ffff
+                sta $ffff
+
+                bit any_bad
+                bmi test_end
+
+                jsr test_pass_callback
+                
+                ldx #messages.ok
+                jsr print_message
+                
+test_end:
+                jsr test_end_callback
+
+                jmp run_instruction_test_loop
+
+skip_test:
+                ldx #messages.skipped
+                jsr print_message
+
+                jmp run_instruction_test_loop
+
+all_tests_done:
+                jmp finish_callback
+
+messages: .block
+ok=*-messages
+                .text " - ok",10,13,0
+skipped=*-messages
+                .text " - skipped",10,13,0
+                .endblock
+
+print_message: .proc
+                lda messages,x
+                beq done
+                jsr print_char
+                inx
+                bne print_message
+done:
+                rts
+                .endproc
+
+print_crlf:
+                lda #13
+                jsr print_char
+                lda #10
+                jmp print_char
+
+;-------------------------------------------------------------------------
+
+noise_a:
+                clc
+                lda input_state.a
+                adc #11
+                sta input_state.a
+                rts
+                
+noise_x:
+                lda index_type
+                cmp #Index.x
+                beq +
+                clc
+                lda input_state.x
+                adc #13
+                sta input_state.x
++
+                rts
+
+noise_y:
+                lda index_type
+                cmp #Index.y
+                beq +
+                clc
+                lda input_state.y
+                adc #17
+                sta input_state.y
++
+                rts                
+
+noise_s:
+                clc
+                lda input_state.s
+                adc #19
+                sta input_state.s
+                rts
+
+;-------------------------------------------------------------------------
+
+                ; cycles through all operands  
+cycle_operand:
+                jsr noise_a
+                jsr noise_x
+                jsr noise_y
+                jsr noise_s
+                
+                .step_value input_state.operand
+                bne test_one_state_loop
+                jmp instruction_test_done
+
+;-------------------------------------------------------------------------
+
+                ; cycles through all operand, A, C. When operand
+                ; changes, overwrites the immediate value in the exec
+                ; routine with it.
+cycle_imm_A_C:
+                .step_value input_state.a
+                bne test_one_state_loop
+                
+                jsr next_operand_C
+
+                lda input_state.operand
+                ldy #1
+                sta (exec_routine),y
+                jmp test_one_state_loop
+
+;-------------------------------------------------------------------------
+
+                ; cycles through all operand, A, C. When operand
+                ; changes, overwrites the immediate value in the exec
+                ; routine with it.
+cycle_imm_A_C_D:
+                .step_value input_state.a
+                bne test_one_state_loop
+                
+                jsr next_operand_C_D
+
+                lda input_state.operand
+                ldy #1
+                sta (exec_routine),y
+                jmp test_one_state_loop
+                
+;-------------------------------------------------------------------------
+
+                ; cycles through all operand, A, C.
+cycle_operand_A_C:
+                .step_value input_state.a
+                bne test_one_state_loop
+                
+                jsr next_operand_C
+                jmp test_one_state_loop
+
+;-------------------------------------------------------------------------
+
+                ; cycles through all A, X
+cycle_A_X:
+                inc input_state.a
+                bne test_one_state_loop
+
+                lda input_state.x
+                eor #$ff
+                jsr progress
+
+                inc input_state.x
+                bne test_one_state_loop
+
+                jsr noise_y
+                jsr noise_s
+
+                jmp instruction_test_done
+
+;-------------------------------------------------------------------------
+
+                ; cycles through all operand, A, C, D.
+cycle_operand_A_C_D:
+                .step_value input_state.a
+                bne test_one_state_loop
+
+                jsr next_operand_C_D
+                jmp test_one_state_loop
+                
+;-------------------------------------------------------------------------
+
+                ; select next operand, C. If operand changed, return
+                ; to caller; otherwise, loop or done.
+next_operand_C:
+                lda input_state.p
+                eor #1
+                sta input_state.p
+                lsr a
+                bcs test_one_state_loop
+
+next_operand_with_progress:
+                jsr noise_x
+                jsr noise_y
+                jsr noise_s
+
+                lda input_state.operand
+                eor #$ff
+                jsr progress
+
+                .step_value input_state.operand
+                beq instruction_test_done
+                rts
+
+;-------------------------------------------------------------------------
+
+                ; select next operand, C, D. If operand changed,
+                ; return to caller; otherwise, loop or done.
+next_operand_C_D: .proc
+                lda input_state.p
+                eor #P.C
+                sta input_state.p
+                and #P.C
+                bne test_one_state_loop
+
+                lda input_state.p
+                eor #P.D
+                sta input_state.p
+                and #P.D
+                bne test_one_state_loop
+
+                jmp next_operand_with_progress
+                .endproc
+                
+;-------------------------------------------------------------------------
+
+cycle_operand_S: .proc
+                .step_value input_state.operand
+                bne test_one_state_loop
+
+                ; slight pain, as S starts at $ff. Well, at least the
+                ; progress printing is easy.
+                lda input_state.s
+                jsr progress
+
+                ldx input_state.s
+                dex
+                stx input_state.s
+                cpx #$ff
+                bne test_one_state_loop
+
+                jmp instruction_test_done
+                .endproc
+                
+;-------------------------------------------------------------------------
+
+progress: .proc
+                bit $ff
+                bmi all_tests_done
+
+                bit show_progress
+                bpl done
+
+                pha
+                and #$0f
+                cmp #$f
+                pla
+                bcs done
+                
+                pha
+                lda #' '
+                jsr print_char
+                pla
+                jsr get_hi_nybble_ascii
+                jsr print_char
+                lda #8
+                jsr print_char
+                jsr print_char
+done:
+                rts
+                .endproc
+                
+;-------------------------------------------------------------------------
+
+print_states: .proc
+                ldx #input_state
+                lda #'I'
+                jsr print_state
+
+                ldx #output_state
+                lda #'o'
+                jsr print_state
+
+                ldx #simulated_state
+                lda #'s'
+                jsr print_state
+
+                rts
+
+print_state:
+                jsr print_char
+
+                lda #':'
+                jsr print_char
+                
+                lda State.operand,x
+                ldy #'O'
+                jsr reg
+                
+                lda State.a,x
+                ldy #'A'
+                jsr reg
+
+                lda State.x,x
+                ldy #'X'
+                jsr reg
+
+                lda State.y,x
+                ldy #'Y'
+                jsr reg
+
+                lda State.s,x
+                ldy #'S'
+                jsr reg
+
+                lda #' '
+                jsr print_char
+
+                lda State.p,x
+                ldy #7
+-
+                asl a
+                pha
+                lda p_bits,y
+                bcs +
+                ora #$20
++
+                jsr print_char
+                pla
+                dey
+                bpl -
+
+                jsr print_crlf
+
+                bit $ff
+                bmi all_tests_done
+
+                rts
+
+reg:
+                pha
+                lda #' '
+                jsr print_char
+                tya
+                jsr print_char
+                lda #'='
+                jsr print_char
+                pla
+                jmp print_hex
+                
+
+p_bits: .text 'CZIDBUVN'
+                .endproc
+                
+;-------------------------------------------------------------------------
+
+nmos_tests:
+                .if should_run_test('adc_bcd_nmos')
+                .Test exec_adc_bcd_zpg,Index.none,simulate_adc_bcd_nmos,cycle_operand_A_C,"adc $nn (BCD) (NMOS)"
+                .endif
+
+                .if should_run_test('sbc_bcd_nmos')
+                .Test exec_sbc_bcd_zpg,Index.none,simulate_sbc_bcd_nmos,cycle_operand_A_C,"sbc $nn (BCD) (NMOS)"
+                .endif
+
+                .if should_run_test('usbc')
+                .Test exec_usbc_imm,Index.none,simulate_usbc,cycle_imm_A_C_D,"usbc #$nn"
+                .endif
+                
+                .if should_run_test('arr')
+                .Test exec_arr_imm,Index.none,simulate_arr,cycle_imm_A_C_D,"arr #$nn"
+                .endif
+
+                .if should_run_test('asr')             
+                .Test exec_asr_imm,Index.none,simulate_asr,cycle_imm_A_C,"asr #$nn"
+                .endif
+
+                .if should_run_test('anc')
+                .Test exec_anc_imm,Index.none,simulate_anc,cycle_imm_A_C,"anc #$nn"
+                .Test exec_anc2_imm,Index.none,simulate_anc,cycle_imm_A_C,"anc2 #$nn"
+                .endif
+
+                .if should_run_test('dcp')
+                .Test exec_dcp_zpg,Index.none,simulate_dcp,cycle_operand_A_C,"dcp $nn"
+                .Test exec_dcp_zpx,Index.x,simulate_dcp,cycle_operand_A_C,"dcp $nn,x"
+                .Test exec_dcp_abs,Index.none,simulate_dcp,cycle_operand_A_C,"dcp $nnnn"
+                .Test exec_dcp_abx,Index.x,simulate_dcp,cycle_operand_A_C,"dcp $nnnn,x"
+                .Test exec_dcp_aby,Index.y,simulate_dcp,cycle_operand_A_C,"dcp $nnnn,y"
+                .Test exec_dcp_inx,Index.x,simulate_dcp,cycle_operand_A_C,"dcp ($nn,x)"
+                .Test exec_dcp_iny,Index.y,simulate_dcp,cycle_operand_A_C,"dcp ($nn),y"
+                .endif
+                
+                .if should_run_test('isb')
+                .Test exec_isb_zpg,Index.none,simulate_isb,cycle_operand_A_C_D,"isb $nn"
+                .Test exec_isb_zpx,Index.x,simulate_isb,cycle_operand_A_C_D,"isb $nn,x"
+                .Test exec_isb_abs,Index.none,simulate_isb,cycle_operand_A_C_D,"isb $nnnn"
+                .Test exec_isb_abx,Index.x,simulate_isb,cycle_operand_A_C_D,"isb $nnnn,x"
+                .Test exec_isb_aby,Index.y,simulate_isb,cycle_operand_A_C_D,"isb $nnnn,y"
+                .Test exec_isb_inx,Index.x,simulate_isb,cycle_operand_A_C_D,"isb ($nn,x)"
+                .Test exec_isb_iny,Index.y,simulate_isb,cycle_operand_A_C_D,"isb ($nn),y"
+                .endif
+                
+                .if should_run_test('lax')
+                .Test exec_lax_zpg,Index.none,simulate_lax,cycle_operand,"lax $nn"
+                .Test exec_lax_zpy,Index.y,simulate_lax,cycle_operand,"lax $nn,y"
+                .Test exec_lax_abs,Index.none,simulate_lax,cycle_operand,"lax $nnnn"
+                .Test exec_lax_aby,Index.y,simulate_lax,cycle_operand,"lax $nnnn,y"
+                .Test exec_lax_inx,Index.x,simulate_lax,cycle_operand,"lax ($nn,x)"
+                .Test exec_lax_iny,Index.y,simulate_lax,cycle_operand,"lax ($nn),y"
+                .endif
+                
+                .if should_run_test('lds')
+                .Test exec_lds_aby,Index.y,simulate_lds,cycle_operand_S,"lds $nnnn,y"
+                .endif
+
+                .if should_run_test('rla')
+                .Test exec_rla_zpg,Index.none,simulate_rla,cycle_operand_A_C,"rla $nn"
+                .Test exec_rla_zpx,Index.x,simulate_rla,cycle_operand_A_C,"rla $nn,x"
+                .Test exec_rla_abs,Index.none,simulate_rla,cycle_operand_A_C,"rla $nnnn"
+                .Test exec_rla_abx,Index.x,simulate_rla,cycle_operand_A_C,"rla $nnnn,x"
+                .Test exec_rla_aby,Index.y,simulate_rla,cycle_operand_A_C,"rla $nnnn,y"
+                .Test exec_rla_inx,Index.x,simulate_rla,cycle_operand_A_C,"rla ($nn,x)"
+                .Test exec_rla_iny,Index.y,simulate_rla,cycle_operand_A_C,"rla ($nn),y"
+                .endif                
+                
+                .if should_run_test('rra')
+                .Test exec_rra_zpg,Index.none,simulate_rra,cycle_operand_A_C_D,"rra $nn"
+                .Test exec_rra_zpx,Index.x,simulate_rra,cycle_operand_A_C_D,"rra $nn,x"
+                .Test exec_rra_abs,Index.none,simulate_rra,cycle_operand_A_C_D,"rra $nnnn"
+                .Test exec_rra_abx,Index.x,simulate_rra,cycle_operand_A_C_D,"rra $nnnn,x"
+                .Test exec_rra_aby,Index.y,simulate_rra,cycle_operand_A_C_D,"rra $nnnn,y"
+                .Test exec_rra_inx,Index.x,simulate_rra,cycle_operand_A_C_D,"rra ($nn,x)"
+                .Test exec_rra_iny,Index.y,simulate_rra,cycle_operand_A_C_D,"rra ($nn),y"
+                .endif
+
+                .if should_run_test('sax')
+                .Test exec_sax_zpg,Index.none,simulate_sax,cycle_A_X,"sax $nn"
+                .Test exec_sax_zpy,Index.y,simulate_sax,cycle_A_X,"sax $nn,y"
+                .Test exec_sax_abs,Index.none,simulate_sax,cycle_A_X,"sax $nnnn"
+                .Test exec_sax_inx,Index.none,simulate_sax,cycle_A_X,"sax ($nn,x)" ;Index.none is valid here - special handling for this oddity
+                .endif
+                
+                .if should_run_test('slo')
+                .Test exec_slo_zpg,Index.none,simulate_slo,cycle_operand_A_C,"slo $nn"
+                .Test exec_slo_zpx,Index.x,simulate_slo,cycle_operand_A_C,"slo $nn,x"
+                .Test exec_slo_abs,Index.none,simulate_slo,cycle_operand_A_C,"slo $nnnn"
+                .Test exec_slo_abx,Index.x,simulate_slo,cycle_operand_A_C,"slo $nnnn,x"
+                .Test exec_slo_aby,Index.y,simulate_slo,cycle_operand_A_C,"slo $nnnn,y"
+                .Test exec_slo_inx,Index.x,simulate_slo,cycle_operand_A_C,"slo ($nn,x)"
+                .Test exec_slo_iny,Index.y,simulate_slo,cycle_operand_A_C,"slo ($nn),y"
+                .endif
+                
+                .if should_run_test('sre')
+                .Test exec_sre_zpg,Index.none,simulate_sre,cycle_operand_A_C,"sre $nn"
+                .Test exec_sre_zpx,Index.x,simulate_sre,cycle_operand_A_C,"sre $nn,x"
+                .Test exec_sre_abs,Index.none,simulate_sre,cycle_operand_A_C,"sre $nnnn"
+                .Test exec_sre_abx,Index.x,simulate_sre,cycle_operand_A_C,"sre $nnnn,x"
+                .Test exec_sre_aby,Index.y,simulate_sre,cycle_operand_A_C,"sre $nnnn,y"
+                .Test exec_sre_inx,Index.x,simulate_sre,cycle_operand_A_C,"sre ($nn,x)"
+                .Test exec_sre_iny,Index.y,simulate_sre,cycle_operand_A_C,"sre ($nn),y"
+                .endif
+                
+                .word 0
+
+;-------------------------------------------------------------------------
+
+exec_lax_zpg: .proc
+                .cpu '6502i'
+                lax output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+exec_lax_zpy: .proc
+                .cpu '6502i'
+                lax output_state.operand,y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+exec_lax_abs: .proc
+                .cpu '6502i'
+                lax @w output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+exec_lax_aby: .proc
+                .cpu '6502i'
+                lax @w output_state.operand,y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+exec_lax_inx: .proc
+                .cpu '6502i'
+                lax (output_operand_ptr,x)
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+exec_lax_iny: .proc
+                .cpu '6502i'
+                lax (output_operand_ptr),y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+simulate_lax: .proc
+                lda input_state.operand
+                sta simulated_state.a
+                sta simulated_state.x
+                .simulate_p P.N|P.Z
+                .simulate_y
+                .simulate_s
+                .simulate_operand
+                rts
+                .endproc
+                
+;-------------------------------------------------------------------------
+
+exec_asr_imm: .proc
+                .cpu '6502i'
+                asr #0
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+simulate_asr: .proc
+                lda input_state.a
+                and input_state.operand
+                lsr a
+                sta simulated_state.a
+                
+                .simulate_p P.N|P.Z|P.C
+
+                ; lsr simulated_state.a
+
+                ; lda simulated_state.p
+                ; adc #0
+                ; sta simulated_state.p
+
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                .simulate_operand
+                rts
+                .endproc
+
+;-------------------------------------------------------------------------
+
+exec_anc_imm: .proc
+                .cpu '6502i'
+                anc #0
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+exec_anc2_imm: .proc
+                .byte $2b,$00
+                jmp exec_done
+                .endproc
+
+simulate_anc: .proc
+                lda input_state.a
+                and input_state.operand
+                sta simulated_state.a
+
+                cmp #$80
+                and #$ff
+                .simulate_p P.N|P.Z|P.C
+
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                .simulate_operand
+                rts
+                .endproc
+                
+;-------------------------------------------------------------------------
+
+exec_dcp_zpg: .proc
+                .cpu '6502i'
+                dcp output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_dcp_zpx: .proc
+                .cpu '6502i'
+                dcp output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_dcp_abs: .proc
+                .cpu '6502i'
+                dcp @w output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_dcp_abx: .proc
+                .cpu '6502i'
+                dcp @w output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_dcp_aby: .proc
+                .cpu '6502i'
+                dcp @w output_state.operand,y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_dcp_inx: .proc
+                .cpu '6502i'
+                dcp (output_operand_ptr,x)
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_dcp_iny: .proc
+                .cpu '6502i'
+                dcp (output_operand_ptr),y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+simulate_dcp: .proc
+                ldx input_state.operand
+                dex
+                stx simulated_state.operand
+                lda input_state.a
+                cmp simulated_state.operand
+                .simulate_p P.N|P.Z|P.C
+
+                .simulate_a
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                rts
+                .endproc
+                
+;-------------------------------------------------------------------------
+
+exec_isb_zpg: .proc
+                .cpu '6502i'
+                isb output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_isb_zpx: .proc
+                .cpu '6502i'
+                isb output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_isb_abs: .proc
+                .cpu '6502i'
+                isb @w output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_isb_abx: .proc
+                .cpu '6502i'
+                isb @w output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_isb_aby: .proc
+                .cpu '6502i'
+                isb @w output_state.operand,y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_isb_inx: .proc
+                .cpu '6502i'
+                isb (output_operand_ptr,x)
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_isb_iny: .proc
+                .cpu '6502i'
+                isb (output_operand_ptr),y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+simulate_isb: .proc
+                ldx input_state.operand
+                inx
+                stx simulated_state.operand
+                lda input_state.p
+                lsr a           ;set up C
+                and #P.D>>1
+                beq +
+                sed
++
+                lda input_state.a
+                sbc simulated_state.operand
+                sta simulated_state.a
+                cld
+                .simulate_p P.N|P.V|P.Z|P.C
+
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                rts
+                .endproc
+
+;-------------------------------------------------------------------------
+
+exec_lds_aby: .proc
+                .cpu '6502i'
+                lds output_state.operand,y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+simulate_lds: .proc
+                lda input_state.operand
+                and input_state.s
+                sta simulated_state.a
+                sta simulated_state.x
+                sta simulated_state.s
+
+                ; Z flag is inconsistent on my BBC B. N seems
+                ; reliable.
+                asl a           ;C set if N
+                lda output_state.p
+                and #~P.N
+                bcc +
+                ora #P.N
++
+                sta simulated_state.p
+
+                .simulate_y
+                .simulate_operand
+                rts
+                .endproc
+                
+;-------------------------------------------------------------------------
+
+exec_slo_zpg: .proc
+                .cpu '6502i'
+                slo output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_slo_zpx: .proc
+                .cpu '6502i'
+                slo output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_slo_abs: .proc
+                .cpu '6502i'
+                slo @w output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_slo_abx: .proc
+                .cpu '6502i'
+                slo @w output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_slo_aby: .proc
+                .cpu '6502i'
+                slo @w output_state.operand,y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_slo_inx: .proc
+                .cpu '6502i'
+                slo (output_operand_ptr,x)
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_slo_iny: .proc
+                .cpu '6502i'
+                slo (output_operand_ptr),y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+simulate_slo: .proc
+                lda input_state.operand
+                asl a
+                sta simulated_state.operand
+                ora input_state.a
+                sta simulated_state.a
+                
+                .simulate_p P.N|P.Z|P.C
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                rts
+                .endproc
+                
+;-------------------------------------------------------------------------
+
+exec_sre_zpg: .proc
+                .cpu '6502i'
+                sre output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_sre_zpx: .proc
+                .cpu '6502i'
+                sre output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_sre_abs: .proc
+                .cpu '6502i'
+                sre @w output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_sre_abx: .proc
+                .cpu '6502i'
+                sre @w output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_sre_aby: .proc
+                .cpu '6502i'
+                sre @w output_state.operand,y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_sre_inx: .proc
+                .cpu '6502i'
+                sre (output_operand_ptr,x)
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_sre_iny: .proc
+                .cpu '6502i'
+                sre (output_operand_ptr),y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+simulate_sre: .proc
+                lda input_state.operand
+                lsr a
+                sta simulated_state.operand
+                eor input_state.a
+                sta simulated_state.a
+                
+                .simulate_p P.N|P.Z|P.C
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                rts
+                .endproc
+
+;-------------------------------------------------------------------------
+
+exec_arr_imm: .proc
+                .cpu '6502i'
+                arr #0
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+simulate_arr: .proc
+                .section zp_bss
+                ; Working data for the rather fiddly ARR instruction.
+t: .fill 1
+av: .fill 1
+                .endsection
+                
+                .simulate_operand
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                
+                lda input_state.p
+                and #P.D
+                bne bcd
+
+not_bcd: .block
+                lda input_state.p
+                lsr a           ;set up C
+
+                lda input_state.a
+                and input_state.operand ;do the AND
+                ror a                   ;do the ROR
+                sta simulated_state.a
+
+                .simulate_p P.N|P.Z ;set N+Z from the ROR
+
+                ; set C
+                lda simulated_state.p
+                and #~P.C
+                bit simulated_state.a
+                bvc got_c
+                ora #P.C
+got_c:
+                sta simulated_state.p
+
+                ; set V
+                lda simulated_state.a
+                lsr a
+                eor simulated_state.a
+                and #$20
+                cmp #1        ;C=1 if bits 6 and 5 differ
+                lda simulated_state.p
+                and #~P.V
+                bcc got_v
+                ora #P.V
+got_v:
+                sta simulated_state.p
+                rts
+                .endblock
+
+bcd: .block
+                lda input_state.p
+                lsr a           ;set up C
+
+                lda input_state.a
+                and input_state.operand ;do the AND
+                sta t
+                ror a                   ;do the ROR
+                sta simulated_state.a
+
+                .simulate_p P.N|P.Z
+
+                ; set V
+                lda simulated_state.a
+                eor t
+                and #$40
+                cmp #1          ;C=1 if bit 6 set
+                lda simulated_state.p
+                and #~(P.V|P.C) ;clear C while we're here
+                bcc got_v
+                ora #P.V
+got_v:
+                sta simulated_state.p
+
+                lda t
+                lsr a           ;C=al&1
+                lda t
+                and #$0f
+                adc #0          ;al+(al&1)
+                cmp #6
+                bcc done_lower_nybble
+
+                clc
+                lda simulated_state.a ;s->a
+                adc #6                ;s->a+6
+                and #$0f              ;s->a+6&0xf
+                sta av
+
+                lda simulated_state.a ;s->a
+                and #$f0              ;s->a&0xf0
+                ora av            ;s->a&0xf0|s->a+6&0xf
+                sta simulated_state.a
+done_lower_nybble:
+
+                lda t
+                lsr a
+                lsr a
+                lsr a
+                lsr a           ;t>>4
+                sta av
+                lsr a           ;C=t>>4&1
+                lda av          ;t>>4
+                adc #0          ;t>>4+t>>4&1
+                cmp #6          ;C=1 if ah+(ah&1)>5
+                bcc done_higher_nybble
+
+                ; set C
+                lda simulated_state.p
+                ora #P.C
+                sta simulated_state.p
+
+                ; adjustA
+                lda simulated_state.a
+                clc
+                adc #$60
+                sta simulated_state.a
+
+done_higher_nybble:
+                rts
+                .endblock
+
+                .endproc
+
+;-------------------------------------------------------------------------
+
+exec_rla_zpg: .proc
+                .cpu '6502i'
+                rla output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rla_zpx: .proc
+                .cpu '6502i'
+                rla output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rla_abs: .proc
+                .cpu '6502i'
+                rla @w output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rla_abx: .proc
+                .cpu '6502i'
+                rla @w output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rla_aby: .proc
+                .cpu '6502i'
+                rla @w output_state.operand,y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rla_inx: .proc
+                .cpu '6502i'
+                rla (output_operand_ptr,x)
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rla_iny: .proc
+                .cpu '6502i'
+                rla (output_operand_ptr),y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+simulate_rla: .proc
+                lda input_state.p
+                lsr a           ;set up C
+                
+                lda input_state.operand
+                rol a
+                sta simulated_state.operand
+                lda input_state.a
+                and simulated_state.operand
+                sta simulated_state.a
+                
+                .simulate_p P.N|P.Z|P.C
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                rts
+                .endproc
+
+;-------------------------------------------------------------------------
+
+exec_rra_zpg: .proc
+                .cpu '6502i'
+                rra output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rra_zpx: .proc
+                .cpu '6502i'
+                rra output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rra_abs: .proc
+                .cpu '6502i'
+                rra @w output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rra_abx: .proc
+                .cpu '6502i'
+                rra @w output_state.operand,x
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rra_aby: .proc
+                .cpu '6502i'
+                rra @w output_state.operand,y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rra_inx: .proc
+                .cpu '6502i'
+                rra (output_operand_ptr,x)
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+exec_rra_iny: .proc
+                .cpu '6502i'
+                rra (output_operand_ptr),y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+                
+simulate_rra: .proc
+                lda input_state.p
+                lsr a           ;set up C
+                and #P.D>>1
+                beq +
+                sed
++
+                lda input_state.operand
+                ror a
+                sta simulated_state.operand
+                lda input_state.a
+                adc simulated_state.operand
+                cld
+                sta simulated_state.a
+                .simulate_p P.N|P.Z|P.V|P.C
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                rts
+                .endproc
+
+;-------------------------------------------------------------------------
+
+exec_adc_bcd_zpg: .proc
+                sed
+                adc input_state.operand
+                cld
+                jmp exec_done
+                .endproc
+
+simulate_adc_bcd_nmos: .proc
+ah=bcd_ah
+al=bcd_al
+                
+                lda input_state.p
+                and #~(P.N|P.V|P.Z|P.C)
+                sta simulated_state.p
+
+                lda #0
+                sta ah
+
+                lda input_state.p
+                lsr a           ;set up C
+                lda input_state.a
+                adc input_state.operand
+                bne got_z
+
+                lda simulated_state.p
+                ora #P.Z
+                sta simulated_state.p
+got_z:
+                
+                lda input_state.p
+                lsr a           ;set up C
+
+                lda input_state.a
+                and #$0f
+                sta al
+
+                lda input_state.operand
+                and #$0f
+                adc al
+
+                cmp #10
+                bcc +
+
+                sbc #10
+                and #$0f
+
+                inc ah
++
+                sta al
+
+                lda input_state.a
+                lsr a
+                lsr a
+                lsr a
+                lsr a
+                clc
+                adc ah
+                sta ah
+
+                lda input_state.operand
+                lsr a
+                lsr a
+                lsr a
+                lsr a
+                clc
+                adc ah
+                sta ah
+
+                lda ah
+                and #8
+                beq got_n
+
+                lda simulated_state.p
+                ora #P.N
+                sta simulated_state.p
+got_n:
+
+                lda ah
+                asl a
+                asl a
+                asl a
+                asl a
+                eor input_state.a
+                bpl got_v
+
+                lda input_state.a
+                eor input_state.operand
+                bmi got_v
+
+                lda simulated_state.p
+                ora #P.V
+                sta simulated_state.p
+got_v:
+
+                lda ah
+
+                cmp #10
+                bcc +
+
+                sbc #10
+                and #$0f
+                sta ah
+
+                lda simulated_state.p
+                ora #P.C
+                sta simulated_state.p
++
+                
+                lda al
+                and #$0f
+                sta simulated_state.a
+                
+                lda ah
+                asl a
+                asl a
+                asl a
+                asl a
+                ora simulated_state.a
+                sta simulated_state.a
+
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                .simulate_operand
+                rts
+                
+                .endproc
+
+;-------------------------------------------------------------------------
+
+exec_sbc_bcd_zpg: .proc
+                sed
+                sbc input_state.operand
+                cld
+                jmp exec_done
+                .endproc
+
+simulate_sbc_bcd_nmos: .proc
+ah=bcd_ah
+al=bcd_al
+
+                ; lda input_state.p
+                ; and #~(P.N|P.V|P.Z|P.C)
+                ; sta simulated_state.p
+
+                lda #0
+                sta ah
+                
+                lda input_state.p
+                lsr a           ;set up C
+
+                lda input_state.operand
+                and #$0f
+                sta al
+                
+                lda input_state.a
+                and #$0f
+                sbc al
+                sta al
+
+                lda input_state.operand
+                lsr a
+                lsr a
+                lsr a
+                lsr a
+                sta ah
+
+                lda input_state.a
+                lsr a
+                lsr a
+                lsr a
+                lsr a
+                sec
+                sbc ah
+                sta ah
+
+                lda al
+                and #$10
+                beq +
+
+                sec
+                lda al
+                sbc #6
+                and #$0f
+                sta al
+
+                dec ah
++
+
+                lda ah
+                and #$10
+                beq +
+
+                sec
+                lda ah
+                sbc #6
+                and #$0f
+                sta ah
++
+
+                lda al
+                and #$0f
+                sta simulated_state.a
+                lda ah
+                asl a
+                asl a
+                asl a
+                asl a
+                ora simulated_state.a
+                sta simulated_state.a
+
+                lda input_state.p
+                lsr a           ;set up C
+                lda input_state.a
+                sbc input_state.operand
+                .simulate_p P.N|P.V|P.Z|P.C
+
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                .simulate_operand
+                rts
+                
+                .endproc
+
+;-------------------------------------------------------------------------
+
+exec_usbc_imm: .proc
+                .byte $eb,$00
+                jmp exec_done
+                .endproc
+
+simulate_usbc: .proc
+
+                ; Assumes SBC is tested and known to be working...
+
+                lda input_state.p
+                lsr a           ;set up C
+
+                and #P.D>>1
+                beq +
+                sed
++
+
+                lda input_state.a
+                sbc input_state.operand
+                sta simulated_state.a
+
+                cld
+
+                .simulate_p P.N|P.V|P.Z|P.C
+                
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                .simulate_operand
+                rts
+                .endproc
+
+;-------------------------------------------------------------------------
+
+exec_sax_zpg: .proc
+                .cpu '6502i'
+                sax output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+exec_sax_zpy: .proc
+                .cpu '6502i'
+                sax output_state.operand,y
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+exec_sax_abs: .proc
+                .cpu '6502i'
+                sax @w output_state.operand
+                .cpu 'default'
+                jmp exec_done
+                .endproc
+
+exec_sax_inx: .proc
+                php
+
+                ; bit tedious, as the address needs adjusting...
+                stx do_sub+1
+
+                lda #output_operand_ptr
+                sec
+do_sub: sbc #0
+                sta do_sax+1
+                lda input_state.a
+                .cpu '6502i'
+do_sax: sax (0,x)
+                .cpu 'default'
+                plp
+                jmp exec_done
+                .endproc
+
+simulate_sax: .proc
+                lda input_state.a
+                and input_state.x
+                sta simulated_state.operand
+                
+                .simulate_a
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                .simulate_p 0
+                rts
+                .endproc
+
+;-------------------------------------------------------------------------
+
+cmos_tests:
+                .if should_run_test('adc_bcd_cmos')
+                .Test exec_adc_bcd_zpg,Index.none,simulate_adc_bcd_cmos,cycle_operand_A_C,"adc $nn (BCD) (CMOS)"
+                .endif
+
+                .if should_run_test('sbc_bcd_cmos')
+                .Test exec_sbc_bcd_zpg,Index.none,simulate_sbc_bcd_cmos,cycle_operand_A_C,"sbc $nn (BCD) (CMOS)"
+                .endif
+
+                .word 0
+
+;-------------------------------------------------------------------------
+
+simulate_adc_bcd_cmos: .proc
+                jsr simulate_adc_bcd_nmos
+                jsr simulate_bcd_cmos_flags
+                rts
+                .endproc
+
+;-------------------------------------------------------------------------
+
+simulate_sbc_bcd_cmos: .proc
+
+                lda input_state.p
+                and #~(P.N|P.V|P.Z|P.C)
+                sta simulated_state.p
+                
+; int al = (s->a & 0xf) - (s->data & 0xf) - !s->p.bits.c;
+                lda input_state.operand
+                and #$0f
+                sta al+0
+                
+                lda input_state.p
+                lsr a           ;set up C
+
+                lda input_state.a
+                and #$0f
+                sbc al+0
+                sta al+0
+                lda #0
+                sbc #0
+                sta al+1
+
+; int result = s->a - s->data - !s->p.bits.c;
+                lda input_state.p
+                lsr a
+                lda input_state.a
+                sbc input_state.operand
+                sta result+0
+                lda #0
+                sbc #0
+                sta result+1
+
+; s->p.bits.v = ((s->a ^ s->data) & (s->a ^ (uint8_t)result) & 128) != 0;
+                lda input_state.a
+                eor input_state.operand
+                bpl got_v
+
+                lda input_state.a
+                eor result+0
+                bpl got_v
+
+                lda simulated_state.p
+                ora #P.V
+                sta simulated_state.p
+got_v:
+
+; s->p.bits.c = (result & 0x100) == 0;
+                lda result+1
+                and #1
+                bne got_c
+
+                lda simulated_state.p
+                ora #P.C
+                sta simulated_state.p
+got_c:
+
+; if (result < 0) result -= 0x60;
+                
+                lda result+1
+                bpl +
+
+                sec
+                lda result+0
+                sbc #$60
+                sta result+0
+                lda result+1
+                sbc #0
+                sta result+1
++
+
+; if (al < 0) result -= 0x06;
+
+                lda al+1
+                bpl +
+
+                sec
+                lda result+0
+                sbc #6
+                sta result+0
+                lda result+1
+                sbc #0
+                sta result+1
++
+                
+; s->a = (uint8_t)result;
+                lda result+0
+                sta simulated_state.a
+
+; SetNZ(s, s->a);
+                jsr simulate_bcd_cmos_flags
+
+                .simulate_x
+                .simulate_y
+                .simulate_s
+                .simulate_operand
+                
+                rts
+
+al: .fill 2
+result: .fill 2
+                
+                .endproc
+
+;-------------------------------------------------------------------------
+
+simulate_bcd_cmos_flags: .proc
+                lda simulated_state.p
+                and #~(P.N|P.Z)
+                sta simulated_state.p
+
+                lda simulated_state.a
+                bpl got_n
+
+                lda simulated_state.p
+                ora #P.N
+                sta simulated_state.p
+got_n:
+
+                lda simulated_state.a
+                bne got_z
+
+                lda simulated_state.p
+                ora #P.Z
+                sta simulated_state.p
+got_z:
+                rts
+                .endproc
+                
+;-------------------------------------------------------------------------
+
+                .endsection code
+                

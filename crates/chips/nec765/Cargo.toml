@@ -1,0 +1,18 @@
+[package]
+name = "nec765"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# Opt-in adapter so hosts can use a parsed `.dsk` image directly as the
+# controller's medium (`Fdc<dsk::Disk>`) instead of each writing the same
+# wrapper. Off by default: the chip itself stays disk-format-agnostic.
+dsk = { path = "../../formats/dsk", optional = true }
+
+[features]
+dsk = ["dep:dsk"]
+
+[dev-dependencies]
+bincode = { version = "2", features = ["serde"] }

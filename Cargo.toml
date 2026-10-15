@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/machine", "crates/plugin-api", "crates/core/z80", "crates/core/6502", "crates/chips/ay-3-8910", "crates/chips/nec765", "crates/formats/dsk", "crates/formats/zx-tape"]
+
+# Same release profile as the retroclawd host.
+[profile.release]
+strip = true
+opt-level = "s"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+
+[profile.release.package.z80]
+opt-level = 3
+
+[profile.release.package.machine]
+opt-level = 3
+
+[profile.release.package.ay-3-8910]
+opt-level = 3
+
+[profile.release.package.zx-tape]
+opt-level = 3
+
+[profile.release.package.nec765]
+opt-level = 3

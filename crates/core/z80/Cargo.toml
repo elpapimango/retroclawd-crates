@@ -1,0 +1,12 @@
+[package]
+name = "z80"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+machine = { path = "../../machine" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+bincode = { version = "2", features = ["serde"] }

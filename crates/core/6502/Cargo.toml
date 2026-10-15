@@ -1,0 +1,12 @@
+[package]
+# "6502" isn't a legal Rust identifier (can't start with a digit), so the
+# crate itself is "mos6502" -- the directory stays `crates/core/6502` to
+# match every other crate's dir-name-mirrors-what-it-is convention.
+name = "mos6502"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+machine = { path = "../../machine" }
+serde = { version = "1", features = ["derive"] }
