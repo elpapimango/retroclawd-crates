@@ -109,7 +109,30 @@ impl SymbolTable {
                 .then(|| self.address(word))
                 .flatten();
             match known {
-                Some(addr) => out.push_str(&format!("{prefix}{addr:04X}")),
+                Some(addr) => {
+                    // `NAME+1`, `NAME - $10`: fold constant offsets, since the assemblers take numbers only.
+                    let mut value = i32::from(addr);
+                    while let Some((delta, rest)) = offset_after(chars.clone()) {
+                        value += delta;
+                        chars = rest;
+                    }
+                    let value = value.rem_euclid(0x1_0000) as u16;
+                    // `#<NAME` / `#>NAME` (6502): the low / high byte.
+                    let byte = if out.ends_with("#<") {
+                        Some(value & 0xFF)
+                    } else if out.ends_with("#>") {
+                        Some(value >> 8)
+                    } else {
+                        None
+                    };
+                    match byte {
+                        Some(b) => {
+                            out.pop();
+                            out.push_str(&format!("{prefix}{b:02X}"));
+                        }
+                        None => out.push_str(&format!("{prefix}{value:04X}")),
+                    }
+                }
                 None => out.push_str(word),
             }
         }
@@ -184,6 +207,41 @@ impl SymbolTable {
         }
         None
     }
+}
+
+/// `+ N` / `- N` (spaces allowed, N decimal, `$hex`, `0xhex` or `NNh`) at the front of `chars`: the signed amount and the iterator
+/// past it. `None` when what follows is not a constant offset.
+fn offset_after<'a>(
+    mut chars: std::iter::Peekable<std::str::CharIndices<'a>>,
+) -> Option<(i32, std::iter::Peekable<std::str::CharIndices<'a>>)> {
+    let skip_spaces = |chars: &mut std::iter::Peekable<std::str::CharIndices<'a>>| {
+        while chars.next_if(|(_, c)| *c == ' ' || *c == '\t').is_some() {}
+    };
+    skip_spaces(&mut chars);
+    let sign = match chars.next()?.1 {
+        '+' => 1,
+        '-' => -1,
+        _ => return None,
+    };
+    skip_spaces(&mut chars);
+    let mut token = String::new();
+    if let Some((_, c)) = chars.next_if(|(_, c)| c.is_ascii_digit() || *c == '$') {
+        token.push(c);
+    } else {
+        return None;
+    }
+    while let Some((_, c)) = chars.next_if(|(_, c)| c.is_ascii_alphanumeric()) {
+        token.push(c);
+    }
+    let lower = token.to_ascii_lowercase();
+    let value = if let Some(hex) = lower.strip_prefix('$').or_else(|| lower.strip_prefix("0x")) {
+        i32::from_str_radix(hex, 16).ok()?
+    } else if let Some(hex) = lower.strip_suffix('h') {
+        i32::from_str_radix(hex, 16).ok()?
+    } else {
+        lower.parse::<i32>().ok()?
+    };
+    Some((sign * value, chars))
 }
 
 /// Names an operand can be that are not symbols: the Z80's and 6502's registers and the Z80's condition codes.
@@ -358,6 +416,38 @@ al d800 .colour
         let mut t = table();
         t.merge(&SymbolTable::from_entries(&[(0xFFD2, "PRINT_CHAR")]));
         assert_eq!(t.annotate("JSR $FFD2"), "JSR $FFD2  ; PRINT_CHAR");
+    }
+
+    #[test]
+    fn substitute_folds_offsets_and_byte_selectors() {
+        let table = SymbolTable::from_entries(&[(0xFFD2, "CHROUT"), (0xD020, "BORDER")]);
+        assert_eq!(table.substitute("STA BORDER+1", "$"), "STA $D021");
+        assert_eq!(table.substitute("STA BORDER - $10", "$"), "STA $D010");
+        assert_eq!(
+            table.substitute("LD A,(BORDER+0x0A)", "0x"),
+            "LD A,(0xD02A)"
+        );
+        assert_eq!(table.substitute("LDA BORDER+2,X", "$"), "LDA $D022,X");
+        assert_eq!(table.substitute("JMP CHROUT+1+1", "$"), "JMP $FFD4");
+        assert_eq!(
+            table.substitute("JMP CHROUT+$FF", "$"),
+            "JMP $00D1",
+            "wraps at 64K"
+        );
+        assert_eq!(table.substitute("LDA #<CHROUT", "$"), "LDA #$D2");
+        assert_eq!(table.substitute("LDA #>CHROUT", "$"), "LDA #$FF");
+        assert_eq!(table.substitute("LDA #>BORDER+$100", "$"), "LDA #$D1");
+        assert_eq!(
+            table.substitute("LD A,(IX+5)", "0x"),
+            "LD A,(IX+5)",
+            "registers keep their displacement"
+        );
+        assert_eq!(table.substitute("STA NOWHERE+1", "$"), "STA NOWHERE+1");
+        assert_eq!(
+            table.substitute("STA BORDER+X", "$"),
+            "STA $D020+X",
+            "not a constant: left for the assembler to refuse"
+        );
     }
 
     #[test]
