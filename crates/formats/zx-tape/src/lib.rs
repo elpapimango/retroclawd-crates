@@ -100,6 +100,34 @@ impl Tape {
         self
     }
 
+    /// This tape with every pulse length converted from a `from_hz` T-state clock to a `to_hz` one (rounded, never below
+    /// one cycle). The parsers give lengths in the Spectrum's domain -- `.tzx` and `.pzx` count T-states of the 3.5 MHz
+    /// Spectrum, `.csw` and `.voc` turn seconds into cycles at 3.5469 MHz -- so a machine with another clock, like the
+    /// ZX81's 3.25 MHz, rescales the tape to hear the signal at its own pace: `tape.rescaled(3_500_000, 3_250_000)`.
+    /// Stop points and the raw blocks kept for fast-load traps are unchanged.
+    #[must_use]
+    pub fn rescaled(&self, from_hz: u64, to_hz: u64) -> Tape {
+        assert!(from_hz > 0, "the source clock must be non-zero");
+        let events = self
+            .events
+            .iter()
+            .map(|event| match event {
+                Event::Pulse(pulse) => {
+                    let cycles = (u64::from(pulse.cycles) * to_hz + from_hz / 2) / from_hz;
+                    Event::Pulse(Pulse {
+                        cycles: cycles.clamp(1, u64::from(u32::MAX)) as u32,
+                        level: pulse.level,
+                    })
+                }
+                Event::Stop => Event::Stop,
+            })
+            .collect();
+        Tape {
+            events,
+            ..self.clone()
+        }
+    }
+
     /// Total playing time of every pulse, in Z80 T-states.
     pub fn total_cycles(&self) -> u64 {
         self.events
@@ -3128,5 +3156,35 @@ mod tests {
                 error * 100.0
             );
         }
+    }
+
+    #[test]
+    fn rescaled_converts_pulse_lengths_and_keeps_stops_and_blocks() {
+        let tape = Tape::from_pulses([
+            Pulse {
+                cycles: 3_500,
+                level: true,
+            },
+            Pulse {
+                cycles: 7_000,
+                level: false,
+            },
+            Pulse {
+                cycles: 1,
+                level: true,
+            },
+        ]);
+        let scaled = tape.rescaled(3_500_000, 3_250_000);
+        // 3500 -> 3250, 7000 -> 6500, and a 1-cycle pulse stays at least 1.
+        assert_eq!(scaled.total_cycles(), 3_250 + 6_500 + 1);
+        assert_eq!(scaled.event_count(), 3);
+        // Scaling by the identity changes nothing.
+        assert_eq!(tape.rescaled(1, 1), tape);
+        // Rounds to the nearest cycle.
+        let odd = Tape::from_pulses([Pulse {
+            cycles: 3,
+            level: true,
+        }]);
+        assert_eq!(odd.rescaled(2, 1).total_cycles(), 2); // 1.5 rounds up
     }
 }
