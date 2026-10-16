@@ -191,6 +191,14 @@ pub enum Error {
     /// `.voc` only: a Repeat Start block specified count 0xFFFF, which
     /// would require infinite unrolling -- explicitly rejected.
     VocEndlessRepeat,
+    /// `.wav` only: not a RIFF `WAVE` file, or it has no `fmt ` or `data` chunk.
+    NotAWavFile,
+    /// `.wav` only: a sample format other than integer PCM (8, 16, 24 or 32 bit) or IEEE float (32 or 64 bit): the
+    /// format tag and the bits per sample.
+    UnsupportedWavFormat {
+        tag: u16,
+        bits: u16,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -219,6 +227,14 @@ impl std::fmt::Display for Error {
                 )
             }
             Error::CswInflateFailed => write!(f, ".csw Z-RLE (zlib) data failed to decompress"),
+            Error::NotAWavFile => write!(
+                f,
+                "not a .wav file (no RIFF/WAVE header, or no fmt/data chunk)"
+            ),
+            Error::UnsupportedWavFormat { tag, bits } => write!(
+                f,
+                "unsupported .wav sample format (tag {tag}, {bits} bits): only PCM 8/16/24/32-bit and float 32/64-bit"
+            ),
             Error::NotAVocFile => write!(
                 f,
                 "not a .voc file (missing or invalid Creative Voice File header)"
@@ -826,6 +842,124 @@ fn decode_voc_pcm_samples(
             }));
         }
     }
+}
+
+/// How far a sample must swing from zero, as a fraction of the recording's loudest sample, to flip the EAR level in
+/// [`parse_wav`]: 10 %, so hiss and hum around the zero line do not turn into pulses.
+const WAV_TRIGGER: f32 = 0.10;
+
+/// Parses a `.wav` recording of a cassette into EAR-line pulses, in the same Z80 T-state domain as [`parse_csw`] and
+/// [`parse_voc`] (3,546,900 Hz).
+///
+/// Supported: a RIFF `WAVE` file with integer PCM (format tag 1, or the extensible tag `0xFFFE` carrying it) of 8
+/// (unsigned), 16, 24 or 32 bits, or IEEE float (tag 3) of 32 or 64 bits, at any sample rate; of several channels
+/// the first one is used. The `data` chunk may claim more bytes than the file holds (streamed recordings): what is
+/// there is read.
+///
+/// The waveform becomes a square wave with a Schmitt trigger: the line goes high when a sample rises above
+/// [`WAV_TRIGGER`] of the file's peak and low when it falls below minus that, and keeps its level in between, so a
+/// noisy or sine-shaped recording still gives one clean edge per cycle. A silent file is one low pulse. Like `.csw`
+/// and `.voc` it has no ROM-block structure, so a fast-load trap never engages for it.
+pub fn parse_wav(bytes: &[u8]) -> Result<Tape, Error> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err(Error::NotAWavFile);
+    }
+    // Walk the chunks for `fmt ` and `data`.
+    let (mut format, mut data): (Option<&[u8]>, Option<&[u8]>) = (None, None);
+    let mut pos = 12;
+    while pos + 8 <= bytes.len() {
+        let id = &bytes[pos..pos + 4];
+        let declared = u32::from_le_bytes([
+            bytes[pos + 4],
+            bytes[pos + 5],
+            bytes[pos + 6],
+            bytes[pos + 7],
+        ]) as usize;
+        let body_start = pos + 8;
+        let body_end = body_start.saturating_add(declared).min(bytes.len());
+        match id {
+            b"fmt " => format = Some(&bytes[body_start..body_end]),
+            b"data" => {
+                data = Some(&bytes[body_start..body_end]);
+                break;
+            }
+            _ => {}
+        }
+        // Chunks are padded to an even length.
+        pos = body_start
+            .saturating_add(declared)
+            .saturating_add(declared & 1);
+    }
+    let (Some(fmt), Some(data)) = (format, data) else {
+        return Err(Error::NotAWavFile);
+    };
+    if fmt.len() < 16 {
+        return Err(Error::NotAWavFile);
+    }
+    let mut tag = u16::from_le_bytes([fmt[0], fmt[1]]);
+    let channels = usize::from(u16::from_le_bytes([fmt[2], fmt[3]])).max(1);
+    let rate = u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
+    let bits = u16::from_le_bytes([fmt[14], fmt[15]]);
+    if tag == 0xFFFE && fmt.len() >= 26 {
+        // WAVE_FORMAT_EXTENSIBLE: the real tag is the first two bytes of the sub-format GUID.
+        tag = u16::from_le_bytes([fmt[24], fmt[25]]);
+    }
+    if rate == 0 {
+        return Err(Error::NotAWavFile);
+    }
+    let sample_bytes = usize::from(bits / 8);
+    let decode: fn(&[u8]) -> f32 = match (tag, bits) {
+        (1, 8) => |b| (f32::from(b[0]) - 128.0) / 128.0,
+        (1, 16) => |b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32_768.0,
+        (1, 24) => |b| (i32::from_le_bytes([0, b[0], b[1], b[2]]) >> 8) as f32 / 8_388_608.0,
+        (1, 32) => |b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32 / 2_147_483_648.0,
+        (3, 32) => |b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+        (3, 64) => |b| f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as f32,
+        _ => return Err(Error::UnsupportedWavFormat { tag, bits }),
+    };
+    let frame = sample_bytes * channels;
+    let samples: Vec<f32> = data
+        .chunks_exact(frame)
+        .map(|f| decode(&f[..sample_bytes]))
+        .collect();
+    let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    let threshold = peak * WAV_TRIGGER;
+
+    let mut events = Vec::new();
+    let (mut level, mut run_start, mut remainder) = (false, 0usize, 0u64);
+    let push = |events: &mut Vec<Event>, level: bool, samples: usize, remainder: &mut u64| {
+        let cycles = voc_run_cycles(samples as u64, rate, remainder);
+        if cycles > 0 {
+            events.push(Event::Pulse(Pulse { cycles, level }));
+        }
+    };
+    for (i, &sample) in samples.iter().enumerate() {
+        let next = if peak > 0.0 && sample >= threshold {
+            true
+        } else if peak > 0.0 && sample <= -threshold {
+            false
+        } else {
+            level
+        };
+        if next != level {
+            push(&mut events, level, i - run_start, &mut remainder);
+            level = next;
+            run_start = i;
+        }
+    }
+    push(
+        &mut events,
+        level,
+        samples.len() - run_start,
+        &mut remainder,
+    );
+
+    Ok(Tape {
+        events,
+        blocks: Vec::new(),
+        block_starts: Vec::new(),
+        block_ends: Vec::new(),
+    })
 }
 
 /// Parses a `.csw` (Compressed Square Wave) file -- a literal sampled
@@ -3186,5 +3320,140 @@ mod tests {
             level: true,
         }]);
         assert_eq!(odd.rescaled(2, 1).total_cycles(), 2); // 1.5 rounds up
+    }
+
+    /// A `.wav` of `samples` (already encoded) with the given format fields.
+    fn wav_bytes(tag: u16, channels: u16, rate: u32, bits: u16, data: &[u8]) -> Vec<u8> {
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&tag.to_le_bytes());
+        fmt.extend_from_slice(&channels.to_le_bytes());
+        fmt.extend_from_slice(&rate.to_le_bytes());
+        fmt.extend_from_slice(&(rate * u32::from(channels) * u32::from(bits / 8)).to_le_bytes());
+        fmt.extend_from_slice(&(channels * (bits / 8)).to_le_bytes());
+        fmt.extend_from_slice(&bits.to_le_bytes());
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&((4 + 8 + fmt.len() + 8 + data.len()) as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVEfmt ");
+        out.extend_from_slice(&(fmt.len() as u32).to_le_bytes());
+        out.extend_from_slice(&fmt);
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(data);
+        out
+    }
+
+    /// 16-bit mono samples: `runs` of `(length in samples, level)`.
+    fn square_16(runs: &[(usize, bool)]) -> Vec<u8> {
+        runs.iter()
+            .flat_map(|&(n, high)| {
+                let v: i16 = if high { 20_000 } else { -20_000 };
+                std::iter::repeat_n(v.to_le_bytes(), n).flatten()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_16_bit_mono_wav_becomes_pulses_in_the_spectrum_clock() {
+        // 441 samples high, 441 low, 882 high at 44.1 kHz: 10 ms, 10 ms, 20 ms.
+        let data = square_16(&[(441, true), (441, false), (882, true)]);
+        let tape = parse_wav(&wav_bytes(1, 1, 44_100, 16, &data)).unwrap();
+        let cycles = |ms: u64| (ms * 3_546_900 / 1000) as u32;
+        assert_eq!(
+            pulses_of(&tape),
+            vec![(cycles(10), true), (cycles(10), false), (cycles(20), true)]
+        );
+        assert_eq!(tape.blocks.len(), 0, "raw audio has no ROM-block structure");
+    }
+
+    #[test]
+    fn eight_bit_stereo_and_float_wavs_decode_to_the_same_pulses() {
+        let want = vec![(3_546_900 / 100, true), (3_546_900 / 100, false)]; // 10 ms each at 44.1 kHz? no: see below
+        // 100 samples at 10 kHz = 10 ms: high then low.
+        let rate = 10_000;
+        let eight: Vec<u8> = (0..200).map(|i| if i < 100 { 230 } else { 26 }).collect();
+        let t8 = parse_wav(&wav_bytes(1, 1, rate, 8, &eight)).unwrap();
+        assert_eq!(pulses_of(&t8), want);
+        // Stereo 16-bit: the first channel carries the signal, the second is loud noise that must be ignored.
+        let stereo: Vec<u8> = (0..200)
+            .flat_map(|i| {
+                let left: i16 = if i < 100 { 12_000 } else { -12_000 };
+                let right: i16 = if i % 2 == 0 { 30_000 } else { -30_000 };
+                [left.to_le_bytes(), right.to_le_bytes()].concat()
+            })
+            .collect();
+        let ts = parse_wav(&wav_bytes(1, 2, rate, 16, &stereo)).unwrap();
+        assert_eq!(pulses_of(&ts), want);
+        // 32-bit float.
+        let float: Vec<u8> = (0..200)
+            .flat_map(|i| (if i < 100 { 0.5f32 } else { -0.5f32 }).to_le_bytes())
+            .collect();
+        let tf = parse_wav(&wav_bytes(3, 1, rate, 32, &float)).unwrap();
+        assert_eq!(pulses_of(&tf), want);
+        // 24-bit.
+        let i24: Vec<u8> = (0..200)
+            .flat_map(|i| {
+                let v: i32 = if i < 100 { 4_000_000 } else { -4_000_000 };
+                v.to_le_bytes()[..3].to_vec()
+            })
+            .collect();
+        let t24 = parse_wav(&wav_bytes(1, 1, rate, 24, &i24)).unwrap();
+        assert_eq!(pulses_of(&t24), want);
+    }
+
+    #[test]
+    fn noise_around_zero_does_not_make_edges_but_a_sine_gives_one_cycle_per_period() {
+        // A square wave of +-20000 with +-1500 of wobble stays one clean pulse each way (the trigger is 10% of the peak).
+        let noisy: Vec<u8> = (0..400)
+            .flat_map(|i| {
+                let base: i16 = if i < 200 { 20_000 } else { -20_000 };
+                let wobble: i16 = if i % 3 == 0 { 1_500 } else { -1_500 };
+                (base + wobble).to_le_bytes()
+            })
+            .collect();
+        let tape = parse_wav(&wav_bytes(1, 1, 10_000, 16, &noisy)).unwrap();
+        assert_eq!(pulses_of(&tape).len(), 2);
+        // A 1 kHz sine at 48 kHz for 10 periods: ten high and ten low pulses (the first low edge is the start).
+        let sine: Vec<u8> = (0..480)
+            .flat_map(|i| {
+                let v =
+                    (f64::sin(2.0 * std::f64::consts::PI * f64::from(i) / 48.0) * 20_000.0) as i16;
+                v.to_le_bytes()
+            })
+            .collect();
+        let tape = parse_wav(&wav_bytes(1, 1, 48_000, 16, &sine)).unwrap();
+        let pulses = pulses_of(&tape);
+        let highs = pulses.iter().filter(|p| p.1).count();
+        assert_eq!(highs, 10, "{pulses:?}");
+    }
+
+    #[test]
+    fn wav_files_that_are_not_usable_are_refused_clearly() {
+        assert_eq!(
+            parse_wav(b"RIFFxxxxWAVE"),
+            Err(Error::NotAWavFile),
+            "no chunks"
+        );
+        assert_eq!(
+            parse_wav(b"not a wav at all, really"),
+            Err(Error::NotAWavFile)
+        );
+        // ADPCM (tag 2) is a real WAV format this parser does not read.
+        let adpcm = wav_bytes(2, 1, 22_050, 4, &[0; 16]);
+        assert_eq!(
+            parse_wav(&adpcm),
+            Err(Error::UnsupportedWavFormat { tag: 2, bits: 4 })
+        );
+        // A silent recording is one low pulse, not an error.
+        let silent = wav_bytes(1, 1, 10_000, 16, &[0; 2_000]);
+        assert_eq!(
+            pulses_of(&parse_wav(&silent).unwrap()),
+            vec![(354_690, false)]
+        );
+        // A data chunk that claims more than the file holds reads what is there.
+        let mut cut = wav_bytes(1, 1, 10_000, 16, &square_16(&[(100, true), (100, false)]));
+        let claimed = (cut.len() as u32 + 1_000).to_le_bytes();
+        let data_len_at = cut.len() - 400 - 4;
+        cut[data_len_at..data_len_at + 4].copy_from_slice(&claimed);
+        assert_eq!(pulses_of(&parse_wav(&cut).unwrap()).len(), 2);
     }
 }
