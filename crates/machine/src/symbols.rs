@@ -53,6 +53,70 @@ impl SymbolTable {
         self.by_addr.is_empty()
     }
 
+    /// The address of the symbol called `name` (ignoring case), if there is one. Two addresses with the same name give the lower
+    /// one.
+    pub fn address(&self, name: &str) -> Option<u16> {
+        self.by_addr
+            .iter()
+            .find(|(_, n)| n.eq_ignore_ascii_case(name))
+            .map(|(addr, _)| *addr)
+    }
+
+    /// `text` (one line of assembly) with every symbol name in its operands replaced by its address written as `prefix` + four hex
+    /// digits (`"$"` for the 6502 assembler, `"0x"` for the Z80's): the input-side counterpart of [`annotate`](Self::annotate), so
+    /// `JSR CHROUT` assembles. The first word (the mnemonic), register and condition names (`A`, `HL`, `NZ`, ...), text after a
+    /// `;` and anything already written as a number are left alone, as is a name the table does not know.
+    pub fn substitute(&self, text: &str, prefix: &str) -> String {
+        if self.is_empty() {
+            return text.to_string();
+        }
+        let (code, comment) = match text.find(';') {
+            Some(at) => text.split_at(at),
+            None => (text, ""),
+        };
+        let mut out = String::with_capacity(text.len());
+        let mut chars = code.char_indices().peekable();
+        let mut words = 0;
+        while let Some((start, c)) = chars.next() {
+            let starts_word = c.is_ascii_alphabetic() || c == '_';
+            // A number such as `$1A` or `0x1A` or `12h` is one token that merely starts with a digit or `$`.
+            if !starts_word {
+                out.push(c);
+                if c.is_ascii_digit() || c == '$' {
+                    while let Some(&(_, next)) = chars.peek() {
+                        if next.is_ascii_alphanumeric() {
+                            out.push(next);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            let mut end = start + c.len_utf8();
+            while let Some(&(at, next)) = chars.peek() {
+                if next.is_ascii_alphanumeric() || next == '_' || next == '.' {
+                    end = at + next.len_utf8();
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let word = &code[start..end];
+            words += 1;
+            let known = (words > 1 && !is_register_or_condition(word))
+                .then(|| self.address(word))
+                .flatten();
+            match known {
+                Some(addr) => out.push_str(&format!("{prefix}{addr:04X}")),
+                None => out.push_str(word),
+            }
+        }
+        out.push_str(comment);
+        out
+    }
+
     /// Parses a symbol file. One symbol per line, `;`, `#` and `//` start comments, blank lines are ignored:
     ///
     /// * `NAME = $1234`, `NAME EQU 0x1234`, `NAME equ 1234h`, `NAME = 4660` (assembler listings; a value
@@ -120,6 +184,15 @@ impl SymbolTable {
         }
         None
     }
+}
+
+/// Names an operand can be that are not symbols: the Z80's and 6502's registers and the Z80's condition codes.
+fn is_register_or_condition(word: &str) -> bool {
+    const RESERVED: &[&str] = &[
+        "A", "B", "C", "D", "E", "H", "L", "F", "I", "R", "X", "Y", "AF", "BC", "DE", "HL", "SP",
+        "IX", "IY", "PC", "IXH", "IXL", "IYH", "IYL", "AF'", "NZ", "Z", "NC", "PO", "PE", "P", "M",
+    ];
+    RESERVED.iter().any(|r| r.eq_ignore_ascii_case(word))
 }
 
 #[derive(Clone, Copy)]
@@ -285,5 +358,40 @@ al d800 .colour
         let mut t = table();
         t.merge(&SymbolTable::from_entries(&[(0xFFD2, "PRINT_CHAR")]));
         assert_eq!(t.annotate("JSR $FFD2"), "JSR $FFD2  ; PRINT_CHAR");
+    }
+
+    #[test]
+    fn substitute_turns_names_into_addresses_for_either_assembler() {
+        let table = SymbolTable::from_entries(&[
+            (0xFFD2, "CHROUT"),
+            (0x0556, "LD_BYTES"),
+            (0xD020, "BORDER"),
+        ]);
+        assert_eq!(table.substitute("JSR CHROUT", "$"), "JSR $FFD2");
+        assert_eq!(table.substitute("jsr chrout", "$"), "jsr $FFD2");
+        assert_eq!(table.substitute("CALL LD_BYTES", "0x"), "CALL 0x0556");
+        assert_eq!(
+            table.substitute("LDA #$05", "$"),
+            "LDA #$05",
+            "numbers are left alone"
+        );
+        assert_eq!(table.substitute("STA BORDER", "$"), "STA $D020");
+        assert_eq!(table.substitute("LD A,(BORDER)", "0x"), "LD A,(0xD020)");
+        assert_eq!(
+            table.substitute("JSR NOWHERE", "$"),
+            "JSR NOWHERE",
+            "unknown names stay"
+        );
+        assert_eq!(
+            table.substitute("JSR CHROUT ; CHROUT", "$"),
+            "JSR $FFD2 ; CHROUT",
+            "comments stay"
+        );
+        assert_eq!(table.address("border"), Some(0xD020));
+        // The mnemonic and registers are never symbols, even when the table has such a name.
+        let odd = SymbolTable::from_entries(&[(0x1000, "NOP"), (0x2000, "A"), (0x3000, "HL")]);
+        assert_eq!(odd.substitute("NOP", "$"), "NOP");
+        assert_eq!(odd.substitute("LD A,HL", "0x"), "LD A,HL");
+        assert_eq!(SymbolTable::new().substitute("JSR X", "$"), "JSR X");
     }
 }
