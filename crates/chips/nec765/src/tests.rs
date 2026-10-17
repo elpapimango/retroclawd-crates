@@ -849,3 +849,103 @@ fn eject_and_reinsert_a_disk() {
     send(&mut f, &read_cmd(0, 0, 0, 0xC1, 2, 0xC1));
     assert_eq!(drain_execution(&mut f), vec![0x11; 512]);
 }
+
+// ---- two drives -----------------------------------------------------------
+
+fn second_disk() -> TestDisk {
+    TestDisk::new(2).track(
+        0,
+        0,
+        vec![sec(0, 0, 0xC1, 2, 0xA1), sec(0, 0, 0xC2, 2, 0xA2)],
+    )
+}
+
+#[test]
+fn unit_select_addresses_two_independent_drives() {
+    let mut f = fdc(one_track_disk());
+    f.insert_disk_in(1, second_disk());
+    send(&mut f, &read_cmd(0, 0, 0, 0xC1, 2, 0xC1));
+    assert_eq!(drain_execution(&mut f), vec![0x11; 512], "drive A");
+    results(&mut f);
+    send(&mut f, &read_cmd(1, 0, 0, 0xC1, 2, 0xC1));
+    assert_eq!(drain_execution(&mut f), vec![0xA1; 512], "drive B");
+    let r = results(&mut f);
+    assert_eq!(r[0] & 0x03, 1, "ST0 names unit 1: {r:02X?}");
+    // And back to A: the units do not bleed into each other.
+    send(&mut f, &read_cmd(0, 0, 0, 0xC2, 2, 0xC2));
+    assert_eq!(drain_execution(&mut f), vec![0x22; 512]);
+}
+
+#[test]
+fn each_drive_keeps_its_own_head_position() {
+    let mut f = fdc(one_track_disk());
+    f.insert_disk_in(1, second_disk());
+    // Seek A to cylinder 7 and B to cylinder 3; sense interrupt reports each one's PCN.
+    send(&mut f, &[0x0F, 0x00, 7]);
+    send(&mut f, &[0x08]);
+    assert_eq!(results(&mut f), vec![0x20, 7]);
+    send(&mut f, &[0x0F, 0x01, 3]);
+    send(&mut f, &[0x08]);
+    assert_eq!(results(&mut f), vec![0x21, 3]);
+    assert_eq!(f.dump_state().cylinder_of(0), 7);
+    assert_eq!(f.dump_state().cylinder_of(1), 3);
+    // A recalibrate of B does not move A's head.
+    send(&mut f, &[0x07, 0x01]);
+    send(&mut f, &[0x08]);
+    results(&mut f);
+    assert_eq!(f.dump_state().cylinder_of(0), 7);
+    assert_eq!(f.dump_state().cylinder_of(1), 0);
+}
+
+#[test]
+fn an_empty_second_drive_and_units_2_and_3_are_not_ready() {
+    let mut f = fdc(one_track_disk());
+    for unit in [1, 2, 3] {
+        send(&mut f, &read_cmd(unit, 0, 0, 0xC1, 2, 0xC1));
+        let r = results(&mut f);
+        assert_eq!(r[0] & 0xC8, 0x48, "unit {unit} not ready: {r:02X?}");
+    }
+    // Drive A is still fine afterwards.
+    send(&mut f, &read_cmd(0, 0, 0, 0xC1, 2, 0xC1));
+    assert_eq!(drain_execution(&mut f), vec![0x11; 512]);
+    // Inserting into a unit that does not exist does nothing.
+    f.insert_disk_in(2, second_disk());
+    assert!(f.disk_in(2).is_none());
+}
+
+#[test]
+fn ejecting_one_drive_leaves_the_other_and_the_old_api_means_drive_a() {
+    let mut f = fdc(one_track_disk());
+    f.insert_disk_in(1, second_disk());
+    assert!(f.disk().is_some() && f.disk_in(1).is_some());
+    assert!(f.eject_disk_from(1).is_some());
+    assert!(f.disk_in(1).is_none() && f.disk().is_some());
+    assert!(f.eject_disk().is_some());
+    assert!(f.disk().is_none());
+    // The write-protect and motor line are shared; the motor off makes both not ready.
+    f.insert_disk_in(0, one_track_disk());
+    f.insert_disk_in(1, second_disk());
+    f.set_motor(false);
+    for unit in [0, 1] {
+        send(&mut f, &read_cmd(unit, 0, 0, 0xC1, 2, 0xC1));
+        assert_eq!(results(&mut f)[0] & 0xC8, 0x48, "unit {unit}, motor off");
+    }
+}
+
+#[test]
+fn the_state_carries_both_head_positions() {
+    let mut f = fdc(one_track_disk());
+    f.insert_disk_in(1, second_disk());
+    send(&mut f, &[0x0F, 0x00, 7]);
+    send(&mut f, &[0x08]);
+    results(&mut f);
+    send(&mut f, &[0x0F, 0x01, 3]);
+    send(&mut f, &[0x08]);
+    results(&mut f);
+    let state = f.dump_state();
+    let mut g = fdc(one_track_disk());
+    g.insert_disk_in(1, second_disk());
+    g.restore_state(state);
+    assert_eq!(g.dump_state().cylinder_of(0), 7);
+    assert_eq!(g.dump_state().cylinder_of(1), 3);
+}

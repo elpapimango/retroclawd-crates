@@ -31,8 +31,8 @@
 //! Deliberate simplifications (documented, not hardware claims): execution
 //! is instantaneous (no rotational latency, no overrun -- a byte the CPU is
 //! slow to fetch is never lost); the `MT` (multi-track) bit is accepted but
-//! not acted on; the Scan commands report "invalid command"; only drive 0
-//! exists (a command addressing another unit finds it not ready); seek time
+//! not acted on; the Scan commands report "invalid command"; two drives exist
+//! (units 0 and 1; a command addressing another unit, or an empty one, finds it not ready); seek time
 //! is opt-in via `enable_seek_timing`.
 
 use serde::{Deserialize, Serialize};
@@ -270,12 +270,16 @@ enum SeekState {
     Done { st0: u8, pcn: u8 },
 }
 
+/// How many drives the controller addresses (unit select 0 and 1).
+pub const DRIVES: usize = 2;
+
 /// `Fdc`'s own live state, for save states -- deliberately excludes the
 /// inserted disk (`Fdc::disk`); a host that lets the disk be modified
 /// saves the modified image itself (see `cpc`/`zx_spectrum` save states).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FdcState {
-    cylinder: u8,
+    cylinders: [u8; DRIVES],
+    unit: usize,
     current_sector: usize,
     phase: Phase,
     seek: SeekState,
@@ -285,9 +289,14 @@ pub struct FdcState {
 }
 
 impl FdcState {
-    /// Current cylinder register (PCN source for Sense Interrupt Status).
+    /// Current cylinder of the unit last addressed (PCN source for Sense Interrupt Status).
     pub fn cylinder(&self) -> u8 {
-        self.cylinder
+        self.cylinders[self.unit]
+    }
+
+    /// Current cylinder of `unit` (0 or 1; anything else reads 0).
+    pub fn cylinder_of(&self, unit: usize) -> u8 {
+        self.cylinders.get(unit).copied().unwrap_or(0)
     }
 
     /// High-level controller phase label for diagnostics.
@@ -307,9 +316,13 @@ impl FdcState {
 /// trivial in-memory fake without depending on `dsk`.
 #[derive(Clone)]
 pub struct Fdc<D: DiskMedium> {
-    disk: Option<D>,
-    /// Physical cylinder the head is over.
-    cylinder: u8,
+    /// The two drives a CPC or +3 interface can address (unit select 0 and 1). A command for a unit with no disk reports
+    /// not ready; units 2 and 3 do not exist.
+    disks: [Option<D>; DRIVES],
+    /// The unit the command in progress (or the last one) addressed: `disks` and `cylinders` are indexed by it.
+    unit: usize,
+    /// Physical cylinder each drive's head is over.
+    cylinders: [u8; DRIVES],
     /// Rotational position: index of the next sector to pass under the
     /// head on the current track.
     current_sector: usize,
@@ -340,8 +353,9 @@ impl<D: DiskMedium> Default for Fdc<D> {
 impl<D: DiskMedium> Fdc<D> {
     pub fn new() -> Self {
         Self {
-            disk: None,
-            cylinder: 0,
+            disks: [None, None],
+            unit: 0,
+            cylinders: [0; DRIVES],
             current_sector: 0,
             phase: Phase::Idle,
             seek: SeekState::None,
@@ -384,24 +398,44 @@ impl<D: DiskMedium> Fdc<D> {
         }
     }
 
-    /// Replaces any disk already inserted -- a real drive can only hold
-    /// one at a time.
+    /// Replaces any disk already in drive 0 -- a real drive can only hold one at a time.
     pub fn insert_disk(&mut self, disk: D) {
-        self.disk = Some(disk);
+        self.insert_disk_in(0, disk);
     }
 
-    /// Removes and returns the inserted disk, if any.
+    /// Removes and returns the disk in drive 0, if any.
     pub fn eject_disk(&mut self) -> Option<D> {
-        self.disk.take()
+        self.eject_disk_from(0)
     }
 
-    /// The inserted disk, if any.
+    /// The disk in drive 0, if any.
     pub fn disk(&self) -> Option<&D> {
-        self.disk.as_ref()
+        self.disk_in(0)
     }
 
     pub fn disk_mut(&mut self) -> Option<&mut D> {
-        self.disk.as_mut()
+        self.disk_in_mut(0)
+    }
+
+    /// Puts `disk` in `unit` (0 or 1), replacing what was there. A unit that does not exist is ignored.
+    pub fn insert_disk_in(&mut self, unit: usize, disk: D) {
+        if let Some(slot) = self.disks.get_mut(unit) {
+            *slot = Some(disk);
+        }
+    }
+
+    /// Removes and returns the disk in `unit`, if any.
+    pub fn eject_disk_from(&mut self, unit: usize) -> Option<D> {
+        self.disks.get_mut(unit).and_then(Option::take)
+    }
+
+    /// The disk in `unit`, if any.
+    pub fn disk_in(&self, unit: usize) -> Option<&D> {
+        self.disks.get(unit).and_then(Option::as_ref)
+    }
+
+    pub fn disk_in_mut(&mut self, unit: usize) -> Option<&mut D> {
+        self.disks.get_mut(unit).and_then(Option::as_mut)
     }
 
     /// Mirrors the host's drive-motor latch. A drive whose motor is off is
@@ -419,7 +453,8 @@ impl<D: DiskMedium> Fdc<D> {
     /// own doc comment for what's deliberately excluded.
     pub fn dump_state(&self) -> FdcState {
         FdcState {
-            cylinder: self.cylinder,
+            cylinders: self.cylinders,
+            unit: self.unit,
             current_sector: self.current_sector,
             phase: self.phase.clone(),
             seek: self.seek,
@@ -433,7 +468,8 @@ impl<D: DiskMedium> Fdc<D> {
     /// (if any) is left untouched; the caller is responsible for having
     /// already inserted the disk a save state expects.
     pub fn restore_state(&mut self, state: FdcState) {
-        self.cylinder = state.cylinder;
+        self.cylinders = state.cylinders;
+        self.unit = state.unit.min(DRIVES - 1);
         self.current_sector = state.current_sector;
         self.phase = state.phase;
         self.seek = state.seek;
@@ -601,30 +637,43 @@ impl<D: DiskMedium> Fdc<D> {
 
     // ---- drive state ---------------------------------------------------
 
-    /// Only drive 0 exists, and it needs a disk and a spinning motor.
+    /// Makes the unit a command's unit-select bits name the one `disks` and `cylinders` refer to. Units 2 and 3 do not exist: they
+    /// leave the selection alone and are never ready.
+    fn select_unit(&mut self, unit_byte: u8) {
+        let unit = usize::from(unit_byte & 0x03);
+        if unit < DRIVES {
+            self.unit = unit;
+        }
+    }
+
+    /// The addressed unit must exist, hold a disk and have its motor spinning (the CPC has one motor line for both drives).
     fn ready(&self, unit_byte: u8) -> bool {
-        self.disk.is_some() && self.motor && unit_byte & 0x03 == 0
+        let unit = usize::from(unit_byte & 0x03);
+        unit < DRIVES && self.disks[unit].is_some() && self.motor
     }
 
     /// A single-sided image is always read on side 0.
     fn side_for(&self, unit_byte: u8) -> u8 {
         let want = (unit_byte >> 2) & 1;
-        match &self.disk {
+        match &self.disks[self.unit] {
             Some(d) if d.sides() > 1 => want,
             _ => 0,
         }
     }
 
     fn sense_drive_status(&mut self, unit_byte: u8) {
+        self.select_unit(unit_byte);
         let mut st3 = unit_byte & 0x07;
-        let wp = self.disk.as_ref().is_none_or(D::write_protected);
+        let wp = self.disks[self.unit]
+            .as_ref()
+            .is_none_or(D::write_protected);
         if wp {
             st3 |= 0x48; // write protected (+ two-sided, as real CPC drives report)
         }
         if self.ready(unit_byte) {
             st3 |= 0x20;
         }
-        if self.cylinder == 0 {
+        if self.cylinders[self.unit] == 0 {
             st3 |= 0x10;
         }
         self.phase = Phase::Result {
@@ -634,16 +683,17 @@ impl<D: DiskMedium> Fdc<D> {
     }
 
     fn seek(&mut self, unit_byte: u8, target: u8) {
+        self.select_unit(unit_byte);
         let ready = self.ready(unit_byte);
         let mut st0 = unit_byte & 0x07;
         let mut distance = 1;
         if ready {
-            distance = u32::from(target.abs_diff(self.cylinder).max(1));
-            self.cylinder = target;
+            distance = u32::from(target.abs_diff(self.cylinders[self.unit]).max(1));
+            self.cylinders[self.unit] = target;
         } else {
             st0 |= 0x48; // abnormal termination + not ready
         }
-        let pcn = self.cylinder;
+        let pcn = self.cylinders[self.unit];
         self.seek = if self.seek_timing_enabled {
             SeekState::InFlight {
                 remaining: distance * SEEK_TSTATES_PER_TRACK,
@@ -660,7 +710,7 @@ impl<D: DiskMedium> Fdc<D> {
         let bytes = match self.seek {
             SeekState::Done { st0, pcn } => {
                 self.seek = SeekState::None;
-                vec![(st0 & 0xF8) | 0x20, pcn]
+                vec![(st0 & 0xFB) | 0x20, pcn] // ST0 keeps US1/US0: the unit that finished the seek
             }
             // Nothing pending (or the seek is still travelling): the chip
             // answers "invalid command", and firmware polls again.
@@ -670,17 +720,17 @@ impl<D: DiskMedium> Fdc<D> {
     }
 
     fn read_id(&mut self, unit_byte: u8) {
+        self.select_unit(unit_byte);
         let mut st0 = unit_byte & 0x07;
         let mut st1 = 0;
-        let (mut c, mut h, mut r, mut n) = (self.cylinder, (unit_byte >> 2) & 1, 0, 0);
+        let (mut c, mut h, mut r, mut n) = (self.cylinders[self.unit], (unit_byte >> 2) & 1, 0, 0);
         if !self.ready(unit_byte) {
             st0 |= 0x48;
         } else {
             let side = self.side_for(unit_byte);
-            let count = self
-                .disk
+            let count = self.disks[self.unit]
                 .as_ref()
-                .map_or(0, |d| d.sector_count(self.cylinder, side));
+                .map_or(0, |d| d.sector_count(self.cylinders[self.unit], side));
             if count == 0 {
                 st0 |= 0x40;
                 st1 |= 0x01; // missing address mark
@@ -689,10 +739,9 @@ impl<D: DiskMedium> Fdc<D> {
                 if idx >= count {
                     idx = 0;
                 }
-                if let Some(info) = self
-                    .disk
+                if let Some(info) = self.disks[self.unit]
                     .as_ref()
-                    .and_then(|d| d.sector_info(self.cylinder, side, idx))
+                    .and_then(|d| d.sector_info(self.cylinders[self.unit], side, idx))
                 {
                     c = info.id.cylinder;
                     h = info.id.head;
@@ -735,22 +784,26 @@ impl<D: DiskMedium> Fdc<D> {
             side: 0,
             sector_index: 0,
         };
+        self.select_unit(a.unit_byte);
         if !self.ready(a.unit_byte) {
             a.st0 |= 0x48;
             self.finish(&a);
             return;
         }
         a.side = self.side_for(a.unit_byte);
-        if kind.is_write() && self.disk.as_ref().is_none_or(D::write_protected) {
+        if kind.is_write()
+            && self.disks[self.unit]
+                .as_ref()
+                .is_none_or(D::write_protected)
+        {
             a.st0 |= 0x40;
             a.st1 |= 0x02; // not writable
             self.finish(&a);
             return;
         }
-        let count = self
-            .disk
+        let count = self.disks[self.unit]
             .as_ref()
-            .map_or(0, |d| d.sector_count(self.cylinder, a.side));
+            .map_or(0, |d| d.sector_count(self.cylinders[self.unit], a.side));
         if count == 0 {
             a.st0 |= 0x40;
             a.st1 |= 0x01; // missing address mark: unformatted track
@@ -780,10 +833,9 @@ impl<D: DiskMedium> Fdc<D> {
     /// the index hole has passed twice. Records Bad/No Cylinder flags for
     /// the sectors it passes, like the real chip.
     fn find_sector(&mut self, a: &mut Active) -> Option<(usize, SectorInfo)> {
-        let count = self
-            .disk
+        let count = self.disks[self.unit]
             .as_ref()
-            .map_or(0, |d| d.sector_count(self.cylinder, a.side));
+            .map_or(0, |d| d.sector_count(self.cylinders[self.unit], a.side));
         if count == 0 {
             return None;
         }
@@ -797,10 +849,9 @@ impl<D: DiskMedium> Fdc<D> {
         let mut loops = 0;
         let mut found = None;
         while loops < 2 {
-            let Some(info) = self
-                .disk
+            let Some(info) = self.disks[self.unit]
                 .as_ref()
-                .and_then(|d| d.sector_info(self.cylinder, a.side, idx))
+                .and_then(|d| d.sector_info(self.cylinders[self.unit], a.side, idx))
             else {
                 break;
             };
@@ -856,10 +907,9 @@ impl<D: DiskMedium> Fdc<D> {
             let size = Self::transfer_size(&a);
             let attempt = self.weak_read_counter;
             self.weak_read_counter = self.weak_read_counter.wrapping_add(1);
-            let mut buffer = self
-                .disk
+            let mut buffer = self.disks[self.unit]
                 .as_ref()
-                .and_then(|d| d.sector_data(self.cylinder, a.side, idx, attempt))
+                .and_then(|d| d.sector_data(self.cylinders[self.unit], a.side, idx, attempt))
                 .map(<[u8]>::to_vec)
                 .unwrap_or_default();
             buffer.resize(size, 0);
@@ -890,10 +940,9 @@ impl<D: DiskMedium> Fdc<D> {
     }
 
     fn start_read_track(&mut self, mut a: Active) {
-        let count = self
-            .disk
+        let count = self.disks[self.unit]
             .as_ref()
-            .map_or(0, |d| d.sector_count(self.cylinder, a.side));
+            .map_or(0, |d| d.sector_count(self.cylinders[self.unit], a.side));
         self.current_sector = 0;
         a.r = 1;
         let size = Self::transfer_size(&a);
@@ -902,10 +951,9 @@ impl<D: DiskMedium> Fdc<D> {
         for idx in 0..wanted {
             let attempt = self.weak_read_counter;
             self.weak_read_counter = self.weak_read_counter.wrapping_add(1);
-            let Some(info) = self
-                .disk
+            let Some(info) = self.disks[self.unit]
                 .as_ref()
-                .and_then(|d| d.sector_info(self.cylinder, a.side, idx))
+                .and_then(|d| d.sector_info(self.cylinders[self.unit], a.side, idx))
             else {
                 break;
             };
@@ -922,10 +970,9 @@ impl<D: DiskMedium> Fdc<D> {
             }
             a.st1 |= info.st1 & 0x25;
             a.st2 |= info.st2 & 0x61;
-            let mut data = self
-                .disk
+            let mut data = self.disks[self.unit]
                 .as_ref()
-                .and_then(|d| d.sector_data(self.cylinder, a.side, idx, attempt))
+                .and_then(|d| d.sector_data(self.cylinders[self.unit], a.side, idx, attempt))
                 .map(<[u8]>::to_vec)
                 .unwrap_or_default();
             data.resize(size, 0);
@@ -974,8 +1021,14 @@ impl<D: DiskMedium> Fdc<D> {
             return;
         }
         let deleted = a.kind == Kind::WriteDeleted;
-        let wrote = self.disk.as_mut().is_some_and(|d| {
-            d.write_sector(self.cylinder, a.side, a.sector_index, &buffer, deleted)
+        let wrote = self.disks[self.unit].as_mut().is_some_and(|d| {
+            d.write_sector(
+                self.cylinders[self.unit],
+                a.side,
+                a.sector_index,
+                &buffer,
+                deleted,
+            )
         });
         if !wrote {
             a.st0 |= 0x40;
@@ -1015,13 +1068,17 @@ impl<D: DiskMedium> Fdc<D> {
             side: 0,
             sector_index: 0,
         };
+        self.select_unit(a.unit_byte);
         if !self.ready(a.unit_byte) {
             a.st0 |= 0x48;
             self.finish_format_result(&a, [0; 4]);
             return;
         }
         a.side = self.side_for(a.unit_byte);
-        if self.disk.as_ref().is_none_or(D::write_protected) {
+        if self.disks[self.unit]
+            .as_ref()
+            .is_none_or(D::write_protected)
+        {
             a.st0 |= 0x40;
             a.st1 |= 0x02;
             self.finish_format_result(&a, [0; 4]);
@@ -1054,10 +1111,9 @@ impl<D: DiskMedium> Fdc<D> {
                 size_code: c[3],
             })
             .collect();
-        let ok = self
-            .disk
+        let ok = self.disks[self.unit]
             .as_mut()
-            .is_some_and(|d| d.format_track(self.cylinder, a.side, &ids, a.gpl, a.dtl));
+            .is_some_and(|d| d.format_track(self.cylinders[self.unit], a.side, &ids, a.gpl, a.dtl));
         self.current_sector = 0;
         let last = ids
             .last()
