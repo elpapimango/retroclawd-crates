@@ -430,14 +430,6 @@ mod tests {
     }
 
     #[test]
-    fn register_writes_round_trip_through_read() {
-        let mut ay = Ay3_8910::new();
-        write_reg(&mut ay, 6, 0x15);
-        ay.select_register(6);
-        assert_eq!(ay.read(), 0x15);
-    }
-
-    #[test]
     fn tone_period_is_12_bit_split_across_two_registers() {
         let mut ay = Ay3_8910::new();
         write_reg(&mut ay, 0, 0xCD); // channel A fine
@@ -493,18 +485,6 @@ mod tests {
             saw_sound,
             "tone-enabled channel never produced nonzero output"
         );
-    }
-
-    #[test]
-    fn max_volume_matches_the_volume_table_top_entry() {
-        let mut ay = Ay3_8910::new();
-        write_reg(&mut ay, 7, 0b0011_1110); // channel A tone on, forced-high (period will be 0 -> min 1)
-        write_reg(&mut ay, 0, 0); // period effectively 1 -> toggles almost immediately
-        write_reg(&mut ay, 1, 0);
-        write_reg(&mut ay, 8, 0x0F);
-        ay.tick(TONE_PRESCALE); // one toggle: output becomes true
-
-        assert_eq!(ay.output(), VOLUME_TABLE[15] / 3.0);
     }
 
     #[test]

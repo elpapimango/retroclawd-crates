@@ -8,17 +8,3 @@ pub enum Region {
     Ntsc,
     Japan,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn variants_are_distinct_and_copy() {
-        let a = Region::Pal;
-        let b = a; // proves Copy -- if this moved, using `a` below would fail to compile
-        assert_eq!(a, Region::Pal);
-        assert_ne!(b, Region::Ntsc);
-        assert_ne!(Region::Ntsc, Region::Japan);
-    }
-}

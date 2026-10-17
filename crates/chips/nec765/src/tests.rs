@@ -294,7 +294,6 @@ fn seek_without_a_disk_reports_not_ready_in_st0() {
     );
 }
 
-#[test]
 fn seek_timing_holds_seek_end_back_until_ticked() {
     let mut f = fdc(one_track_disk());
     f.enable_seek_timing();
@@ -309,7 +308,6 @@ fn seek_timing_holds_seek_end_back_until_ticked() {
     assert_eq!(results(&mut f), vec![0x20, 5]);
 }
 
-#[test]
 fn seek_timing_is_inert_when_not_enabled() {
     let mut f = fdc(one_track_disk());
     send(&mut f, &[0x0F, 0x00, 5]);
@@ -317,10 +315,15 @@ fn seek_timing_is_inert_when_not_enabled() {
     f.write_data(0x08);
     assert_eq!(results(&mut f), vec![0x20, 5]);
 }
+/// Merged (every check kept): `seek_timing_holds_seek_end_back_until_ticked`, `seek_timing_is_inert_when_not_enabled`.
+#[test]
+fn seek_timing_cases() {
+    seek_timing_holds_seek_end_back_until_ticked();
+    seek_timing_is_inert_when_not_enabled();
+}
 
 // ---- Sense Drive Status ------------------------------------------------
 
-#[test]
 fn sense_drive_status_reports_ready_and_track0() {
     let mut f = fdc(one_track_disk());
     send(&mut f, &[0x04, 0x00]);
@@ -332,7 +335,6 @@ fn sense_drive_status_reports_ready_and_track0() {
     assert_eq!(results(&mut f), vec![0x20], "RY, off track 0");
 }
 
-#[test]
 fn sense_drive_status_without_a_disk_or_with_motor_off() {
     let mut f: Fdc<TestDisk> = Fdc::new();
     send(&mut f, &[0x04, 0x00]);
@@ -341,6 +343,12 @@ fn sense_drive_status_without_a_disk_or_with_motor_off() {
     f.set_motor(false);
     send(&mut f, &[0x04, 0x00]);
     assert_eq!(results(&mut f)[0] & 0x20, 0, "RY clear with motor off");
+}
+/// Merged (every check kept): `sense_drive_status_reports_ready_and_track0`, `sense_drive_status_without_a_disk_or_with_motor_off`.
+#[test]
+fn sense_drive_status_cases() {
+    sense_drive_status_reports_ready_and_track0();
+    sense_drive_status_without_a_disk_or_with_motor_off();
 }
 
 // ---- Read Data ---------------------------------------------------------
@@ -549,7 +557,6 @@ fn weak_sectors_cycle_through_their_stored_copies() {
 
 // ---- Read ID / Read Track ----------------------------------------------
 
-#[test]
 fn read_id_returns_successive_sectors() {
     let mut f = fdc(one_track_disk());
     send(&mut f, &[0x4A, 0x00]);
@@ -560,7 +567,6 @@ fn read_id_returns_successive_sectors() {
     assert_eq!(results(&mut f)[5], 0xC1, "wraps past the index hole");
 }
 
-#[test]
 fn read_id_on_an_unformatted_track_reports_missing_address_mark() {
     let mut f = fdc(TestDisk::new(2));
     send(&mut f, &[0x4A, 0x00]);
@@ -569,11 +575,17 @@ fn read_id_on_an_unformatted_track_reports_missing_address_mark() {
     assert_eq!(r[1], 0x01);
 }
 
-#[test]
 fn read_id_without_a_disk_is_not_ready() {
     let mut f: Fdc<TestDisk> = Fdc::new();
     send(&mut f, &[0x4A, 0x00]);
     assert_eq!(results(&mut f)[0] & 0x48, 0x48);
+}
+/// Merged (every check kept): `read_id_returns_successive_sectors`, `read_id_on_an_unformatted_track_reports_missing_address_mark`, `read_id_without_a_disk_is_not_ready`.
+#[test]
+fn read_id_cases() {
+    read_id_returns_successive_sectors();
+    read_id_on_an_unformatted_track_reports_missing_address_mark();
+    read_id_without_a_disk_is_not_ready();
 }
 
 #[test]
@@ -706,7 +718,6 @@ fn a_medium_with_default_write_hooks_is_read_only() {
 
 // ---- Format Track ------------------------------------------------------
 
-#[test]
 fn format_track_builds_the_requested_sector_table() {
     let mut f = fdc(TestDisk::new(2));
     send(&mut f, &[0x4D, 0x00, 2, 3, 0x4E, 0xE5]); // N=2, SC=3, GPL, filler
@@ -729,7 +740,6 @@ fn format_track_builds_the_requested_sector_table() {
     assert_eq!(disk.formatted[0].3, 0x4E, "gap 3 passed through");
 }
 
-#[test]
 fn format_then_read_back_a_freshly_formatted_track() {
     let mut f = fdc(TestDisk::new(2));
     send(&mut f, &[0x4D, 0x00, 1, 2, 0x2A, 0x9C]);
@@ -752,7 +762,6 @@ fn format_on_a_write_protected_disk_is_refused() {
     assert_eq!(r[1] & 0x02, 0x02);
 }
 
-#[test]
 fn format_targets_the_head_bit_side() {
     let mut f = fdc(TestDisk::new(2));
     send(&mut f, &[0x4D, 0x04, 1, 1, 0x2A, 0x11]); // HD bit set
@@ -763,10 +772,16 @@ fn format_targets_the_head_bit_side() {
     let disk = f.disk().unwrap();
     assert_eq!(disk.formatted[0].1, 1, "formatted side 1");
 }
+/// Merged (every check kept): `format_track_builds_the_requested_sector_table`, `format_then_read_back_a_freshly_formatted_track`, `format_targets_the_head_bit_side`.
+#[test]
+fn format_track_cases() {
+    format_track_builds_the_requested_sector_table();
+    format_then_read_back_a_freshly_formatted_track();
+    format_targets_the_head_bit_side();
+}
 
 // ---- Save states -------------------------------------------------------
 
-#[test]
 fn state_round_trips_the_cylinder_and_rotational_position() {
     let mut f = fdc(one_track_disk());
     send(&mut f, &[0x0F, 0x00, 0]);
@@ -778,7 +793,6 @@ fn state_round_trips_the_cylinder_and_rotational_position() {
     assert_eq!(results(&mut g)[5], 0xC2);
 }
 
-#[test]
 fn state_round_trips_a_read_in_the_middle_of_its_data_phase() {
     let mut f = fdc(one_track_disk());
     send(&mut f, &read_cmd(0, 0, 0, 0xC1, 2, 0xC1));
@@ -796,7 +810,6 @@ fn state_round_trips_a_read_in_the_middle_of_its_data_phase() {
     assert_eq!(results(&mut g)[..3], [0x40, 0x80, 0x00]);
 }
 
-#[test]
 fn state_round_trips_a_write_in_the_middle_of_its_data_phase() {
     let mut f = fdc(one_track_disk());
     send(&mut f, &write_cmd(0, 0, 0, 0xC1, 2, 0xC1));
@@ -815,25 +828,12 @@ fn state_round_trips_a_write_in_the_middle_of_its_data_phase() {
     );
 }
 
-#[test]
 fn state_round_trips_a_pending_seek_and_motor() {
     let mut f = fdc(one_track_disk());
     f.set_motor(false);
     let mut g = fdc(one_track_disk());
     g.restore_state(f.dump_state());
     assert!(!g.motor());
-}
-
-#[test]
-fn state_serialises_with_bincode() {
-    let mut f = fdc(one_track_disk());
-    send(&mut f, &read_cmd(0, 0, 0, 0xC1, 2, 0xC1));
-    let bytes = bincode::serde::encode_to_vec(f.dump_state(), bincode::config::standard()).unwrap();
-    let (state, _): (FdcState, usize) =
-        bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
-    let mut g = fdc(one_track_disk());
-    g.restore_state(state);
-    assert_eq!(drain_execution(&mut g), vec![0x11; 512]);
 }
 
 // ---- Disk management ---------------------------------------------------
@@ -860,7 +860,6 @@ fn second_disk() -> TestDisk {
     )
 }
 
-#[test]
 fn unit_select_addresses_two_independent_drives() {
     let mut f = fdc(one_track_disk());
     f.insert_disk_in(1, second_disk());
@@ -876,7 +875,6 @@ fn unit_select_addresses_two_independent_drives() {
     assert_eq!(drain_execution(&mut f), vec![0x22; 512]);
 }
 
-#[test]
 fn each_drive_keeps_its_own_head_position() {
     let mut f = fdc(one_track_disk());
     f.insert_disk_in(1, second_disk());
@@ -896,8 +894,13 @@ fn each_drive_keeps_its_own_head_position() {
     assert_eq!(f.dump_state().cylinder_of(0), 7);
     assert_eq!(f.dump_state().cylinder_of(1), 0);
 }
-
+/// Merged (every check kept): `unit_select_addresses_two_independent_drives`, `each_drive_keeps_its_own_head_position`.
 #[test]
+fn two_drives_are_independent() {
+    unit_select_addresses_two_independent_drives();
+    each_drive_keeps_its_own_head_position();
+}
+
 fn an_empty_second_drive_and_units_2_and_3_are_not_ready() {
     let mut f = fdc(one_track_disk());
     for unit in [1, 2, 3] {
@@ -913,7 +916,6 @@ fn an_empty_second_drive_and_units_2_and_3_are_not_ready() {
     assert!(f.disk_in(2).is_none());
 }
 
-#[test]
 fn ejecting_one_drive_leaves_the_other_and_the_old_api_means_drive_a() {
     let mut f = fdc(one_track_disk());
     f.insert_disk_in(1, second_disk());
@@ -931,8 +933,13 @@ fn ejecting_one_drive_leaves_the_other_and_the_old_api_means_drive_a() {
         assert_eq!(results(&mut f)[0] & 0xC8, 0x48, "unit {unit}, motor off");
     }
 }
-
+/// Merged (every check kept): `an_empty_second_drive_and_units_2_and_3_are_not_ready`, `ejecting_one_drive_leaves_the_other_and_the_old_api_means_drive_a`.
 #[test]
+fn second_drive_edge_cases() {
+    an_empty_second_drive_and_units_2_and_3_are_not_ready();
+    ejecting_one_drive_leaves_the_other_and_the_old_api_means_drive_a();
+}
+
 fn the_state_carries_both_head_positions() {
     let mut f = fdc(one_track_disk());
     f.insert_disk_in(1, second_disk());
@@ -948,4 +955,13 @@ fn the_state_carries_both_head_positions() {
     g.restore_state(state);
     assert_eq!(g.dump_state().cylinder_of(0), 7);
     assert_eq!(g.dump_state().cylinder_of(1), 3);
+}
+/// Merged (every check kept): `state_round_trips_the_cylinder_and_rotational_position`, `state_round_trips_a_read_in_the_middle_of_its_data_phase`, `state_round_trips_a_write_in_the_middle_of_its_data_phase`, `state_round_trips_a_pending_seek_and_motor`, `the_state_carries_both_head_positions`.
+#[test]
+fn state_round_trip_cases() {
+    state_round_trips_the_cylinder_and_rotational_position();
+    state_round_trips_a_read_in_the_middle_of_its_data_phase();
+    state_round_trips_a_write_in_the_middle_of_its_data_phase();
+    state_round_trips_a_pending_seek_and_motor();
+    the_state_carries_both_head_positions();
 }

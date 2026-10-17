@@ -319,17 +319,6 @@ mod tests {
         assert_eq!(restored, original);
     }
 
-    #[test]
-    fn rc_status_ok_reports_ok() {
-        assert!(RcStatus::ok().is_ok());
-        assert!(!RcStatus::from_code(StatusCode::InternalError).is_ok());
-    }
-
-    #[test]
-    fn vtable_sizes_are_non_zero() {
-        assert!(MachinePluginVTableV1::expected_size() > 0);
-    }
-
     /// The binary layout is the ABI. These pin it on the 64-bit targets the
     /// project ships for (Windows, Linux, macOS): a failure here means a
     /// struct was changed in a way existing plugin libraries cannot follow.

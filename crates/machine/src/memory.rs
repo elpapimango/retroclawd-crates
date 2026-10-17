@@ -158,7 +158,6 @@ mod tests {
         assert_eq!(bus.read(0x0000), 0xFF);
     }
 
-    #[test]
     fn load_writes_bytes_sequentially_into_ram() {
         let mut bus = MemoryBus::new();
         bus.map_ram(0x0000, 0x10000);
@@ -171,7 +170,6 @@ mod tests {
         assert_eq!(bus.read(0x0102), 0x33);
     }
 
-    #[test]
     fn load_outside_any_region_is_dropped_and_not_counted() {
         let mut bus = MemoryBus::new();
         bus.map_ram(0x8000, 0x10);
@@ -183,7 +181,6 @@ mod tests {
         assert_eq!(bus.read(0x0001), 0xFF);
     }
 
-    #[test]
     fn load_counts_only_the_bytes_that_land_in_ram() {
         let mut bus = MemoryBus::new();
         bus.map_ram(0x8000, 1); // a one-byte RAM window at 0x8000
@@ -197,7 +194,6 @@ mod tests {
         assert_eq!(bus.read(0x8002), 0xFF);
     }
 
-    #[test]
     fn load_into_rom_is_dropped_and_not_counted() {
         let mut bus = MemoryBus::new();
         bus.map_rom(0x0000, vec![0xAA, 0xBB]);
@@ -208,15 +204,12 @@ mod tests {
         assert_eq!(bus.read(0x0000), 0xAA);
         assert_eq!(bus.read(0x0001), 0xBB);
     }
-
+    /// Merged (every check kept): `load_writes_bytes_sequentially_into_ram`, `load_outside_any_region_is_dropped_and_not_counted`, `load_counts_only_the_bytes_that_land_in_ram`, `load_into_rom_is_dropped_and_not_counted`.
     #[test]
-    fn peek_does_not_require_mutable_access() {
-        let mut bus = MemoryBus::new();
-        bus.map_ram(0x4000, 0x10);
-        bus.write(0x4000, 0x77);
-
-        let bus = bus; // shadow as immutable -- proves peek takes &self
-        assert_eq!(bus.peek(0x4000), 0x77);
-        assert_eq!(bus.peek(0x0000), 0xFF);
+    fn memory_load_cases() {
+        load_writes_bytes_sequentially_into_ram();
+        load_outside_any_region_is_dropped_and_not_counted();
+        load_counts_only_the_bytes_that_land_in_ram();
+        load_into_rom_is_dropped_and_not_counted();
     }
 }

@@ -95,7 +95,6 @@ mod tests {
         assert_eq!(w.take_hit(), None);
     }
 
-    #[test]
     fn an_exact_port_matches_only_its_own_direction() {
         let mut w = PortWatcher::default();
         w.set_watches(vec![watch(0x00FE, 0xFFFF, false, true)]);
@@ -114,7 +113,6 @@ mod tests {
         assert_eq!(w.take_hit(), None, "taking a hit clears it");
     }
 
-    #[test]
     fn a_partial_mask_matches_every_mirror() {
         let mut w = PortWatcher::default();
         // Any port with bit 0 clear, i.e. every ULA mirror.
@@ -131,8 +129,13 @@ mod tests {
             })
         );
     }
-
+    /// Merged (every check kept): `an_exact_port_matches_only_its_own_direction`, `a_partial_mask_matches_every_mirror`.
     #[test]
+    fn port_matching() {
+        an_exact_port_matches_only_its_own_direction();
+        a_partial_mask_matches_every_mirror();
+    }
+
     fn the_first_hit_is_kept_until_taken() {
         let mut w = PortWatcher::default();
         w.set_watches(vec![watch(0, 0, true, true)]);
@@ -143,12 +146,17 @@ mod tests {
         assert_eq!(w.take_hit().map(|h| h.port), Some(0x5678));
     }
 
-    #[test]
     fn replacing_the_watches_forgets_a_latched_hit() {
         let mut w = PortWatcher::default();
         w.set_watches(vec![watch(0, 0, true, true)]);
         w.note(1, 1, true);
         w.set_watches(Vec::new());
         assert_eq!(w.take_hit(), None);
+    }
+    /// Merged (every check kept): `the_first_hit_is_kept_until_taken`, `replacing_the_watches_forgets_a_latched_hit`.
+    #[test]
+    fn latched_hit() {
+        the_first_hit_is_kept_until_taken();
+        replacing_the_watches_forgets_a_latched_hit();
     }
 }

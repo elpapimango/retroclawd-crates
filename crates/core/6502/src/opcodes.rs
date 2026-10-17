@@ -769,7 +769,6 @@ mod tests {
         cpu.step(bus)
     }
 
-    #[test]
     fn adc_binary_basic() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -779,7 +778,6 @@ mod tests {
         assert_eq!(cpu.p & (FLAG_C | FLAG_V | FLAG_Z | FLAG_N), 0);
     }
 
-    #[test]
     fn adc_binary_signed_overflow_sets_v() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -795,7 +793,6 @@ mod tests {
         assert_eq!(cpu.p & FLAG_C, 0);
     }
 
-    #[test]
     fn adc_binary_carry_and_zero() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -805,8 +802,14 @@ mod tests {
         assert_ne!(cpu.p & FLAG_C, 0);
         assert_ne!(cpu.p & FLAG_Z, 0);
     }
-
+    /// Merged (every check kept): `adc_binary_basic`, `adc_binary_signed_overflow_sets_v`, `adc_binary_carry_and_zero`.
     #[test]
+    fn adc_binary() {
+        adc_binary_basic();
+        adc_binary_signed_overflow_sets_v();
+        adc_binary_carry_and_zero();
+    }
+
     fn sbc_binary_no_borrow_keeps_carry_set() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -817,7 +820,6 @@ mod tests {
         assert_ne!(cpu.p & FLAG_C, 0, "no borrow occurred, C should stay set");
     }
 
-    #[test]
     fn sbc_binary_borrow_clears_carry() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -828,8 +830,13 @@ mod tests {
         assert_eq!(cpu.p & FLAG_C, 0, "borrow occurred, C should clear");
         assert_ne!(cpu.p & FLAG_N, 0);
     }
-
+    /// Merged (every check kept): `sbc_binary_no_borrow_keeps_carry_set`, `sbc_binary_borrow_clears_carry`.
     #[test]
+    fn sbc_binary() {
+        sbc_binary_no_borrow_keeps_carry_set();
+        sbc_binary_borrow_clears_carry();
+    }
+
     fn adc_decimal_99_plus_1_wraps_with_carry() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -840,7 +847,6 @@ mod tests {
         assert_ne!(cpu.p & FLAG_C, 0, "BCD 99 + 1 should set carry (=100)");
     }
 
-    #[test]
     fn adc_decimal_basic_no_carry() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -851,7 +857,6 @@ mod tests {
         assert_eq!(cpu.p & FLAG_C, 0);
     }
 
-    #[test]
     fn adc_decimal_flags_use_the_nmos_partial_adjustment() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -862,6 +867,13 @@ mod tests {
 
         assert_eq!(cpu.a, 0x80);
         assert_eq!(cpu.p & (FLAG_N | FLAG_V | FLAG_Z | FLAG_C), FLAG_N | FLAG_V);
+    }
+    /// Merged (every check kept): `adc_decimal_99_plus_1_wraps_with_carry`, `adc_decimal_basic_no_carry`, `adc_decimal_flags_use_the_nmos_partial_adjustment`.
+    #[test]
+    fn adc_decimal() {
+        adc_decimal_99_plus_1_wraps_with_carry();
+        adc_decimal_basic_no_carry();
+        adc_decimal_flags_use_the_nmos_partial_adjustment();
     }
 
     #[test]

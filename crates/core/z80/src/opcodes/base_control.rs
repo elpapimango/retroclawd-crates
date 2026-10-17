@@ -278,7 +278,6 @@ mod tests {
         assert_eq!(cpu.pc, 0x0D);
     }
 
-    #[test]
     fn jr_nz_taken_when_zero_flag_clear() {
         let mut cpu = Cpu::new();
         cpu.set_f(0); // Z clear
@@ -292,7 +291,6 @@ mod tests {
         assert_eq!(cpu.pc, 5);
     }
 
-    #[test]
     fn jr_nz_not_taken_when_zero_flag_set() {
         let mut cpu = Cpu::new();
         cpu.set_f(FLAG_Z);
@@ -306,7 +304,6 @@ mod tests {
         assert_eq!(cpu.pc, 2); // just past the instruction, no jump
     }
 
-    #[test]
     fn jr_z_taken_when_zero_flag_set() {
         let mut cpu = Cpu::new();
         cpu.set_f(FLAG_Z);
@@ -320,7 +317,6 @@ mod tests {
         assert_eq!(cpu.pc, 5);
     }
 
-    #[test]
     fn jr_nc_and_c_respect_carry_flag() {
         let mut cpu = Cpu::new();
         cpu.set_f(FLAG_C);
@@ -337,6 +333,14 @@ mod tests {
         let c2 = cpu.step(&mut bus);
         assert_eq!(c2, 12);
         assert_eq!(cpu.pc, 4 + 3);
+    }
+    /// Merged (every check kept): `jr_nz_taken_when_zero_flag_clear`, `jr_nz_not_taken_when_zero_flag_set`, `jr_z_taken_when_zero_flag_set`, `jr_nc_and_c_respect_carry_flag`.
+    #[test]
+    fn jr_conditions() {
+        jr_nz_taken_when_zero_flag_clear();
+        jr_nz_not_taken_when_zero_flag_set();
+        jr_z_taken_when_zero_flag_set();
+        jr_nc_and_c_respect_carry_flag();
     }
 
     #[test]

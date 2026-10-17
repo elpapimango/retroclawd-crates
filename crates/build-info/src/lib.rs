@@ -200,7 +200,9 @@ pub fn emit() {
     ]) {
         Some(_) => true,
         // `git` ran but printed nothing: clean. Without git, trust the environment.
-        None => git(&["rev-parse", "HEAD"]).is_none() && env("RC_GIT_DIRTY").as_deref() == Some("1"),
+        None => {
+            git(&["rev-parse", "HEAD"]).is_none() && env("RC_GIT_DIRTY").as_deref() == Some("1")
+        }
     };
     println!("cargo:rustc-env=RC_GIT_COMMIT={commit}");
     println!("cargo:rustc-env=RC_BUILD_NUMBER={build}");
@@ -218,14 +220,22 @@ pub fn emit() {
     println!("cargo:rerun-if-env-changed=RC_GIT_COMMIT");
     println!("cargo:rerun-if-env-changed=RC_GIT_DATE");
     println!("cargo:rerun-if-env-changed=RC_GIT_DIRTY");
-    let mut watch = vec!["HEAD".to_string(), "packed-refs".to_string(), "index".to_string()];
+    let mut watch = vec![
+        "HEAD".to_string(),
+        "packed-refs".to_string(),
+        "index".to_string(),
+    ];
     if let Some(reference) = git(&["symbolic-ref", "-q", "HEAD"]) {
         watch.push(reference);
     }
     for name in watch {
         if let Some(path) = git(&["rev-parse", "--git-path", &name]) {
             let path = PathBuf::from(path);
-            let path = if path.is_absolute() { path } else { dir.join(path) };
+            let path = if path.is_absolute() {
+                path
+            } else {
+                dir.join(path)
+            };
             println!("cargo:rerun-if-changed={}", path.display());
         }
     }
@@ -249,13 +259,19 @@ mod tests {
         assert_eq!(tag, "0.1.0+412.a1b2c3d4e5.2026-10-17");
         let parsed = Info::parse(&tag);
         assert_eq!(parsed, INFO.info());
-        assert_eq!(parsed.to_string(), "0.1.0 build 412 (a1b2c3d4e5, 2026-10-17)");
+        assert_eq!(
+            parsed.to_string(),
+            "0.1.0 build 412 (a1b2c3d4e5, 2026-10-17)"
+        );
         assert_eq!(INFO.to_string(), parsed.to_string());
     }
 
     #[test]
     fn a_dirty_tree_shows_in_the_tag_and_the_text() {
-        let dirty = BuildInfo { dirty: true, ..INFO };
+        let dirty = BuildInfo {
+            dirty: true,
+            ..INFO
+        };
         assert_eq!(dirty.tag(), "0.1.0+412.a1b2c3d4e5.2026-10-17.dirty");
         let parsed = Info::parse(&dirty.tag());
         assert!(parsed.dirty);

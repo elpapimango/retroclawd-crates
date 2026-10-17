@@ -323,7 +323,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn set_register_updates_named_6502_registers() {
         let mut cpu = Cpu::new();
 
@@ -340,7 +339,6 @@ mod tests {
         assert_eq!(cpu.p & FLAG_B, 0);
     }
 
-    #[test]
     fn set_register_rejects_unknown_or_out_of_range_values() {
         let mut cpu = Cpu::new();
 
@@ -349,5 +347,11 @@ mod tests {
 
         let err = cpu.set_register("QQ", 0).unwrap_err();
         assert!(err.contains("unknown register"));
+    }
+    /// Merged (every check kept): `set_register_updates_named_6502_registers`, `set_register_rejects_unknown_or_out_of_range_values`.
+    #[test]
+    fn set_register_cases() {
+        set_register_updates_named_6502_registers();
+        set_register_rejects_unknown_or_out_of_range_values();
     }
 }

@@ -617,17 +617,21 @@ mod tests {
         assert!(disk.read_sector(9, 0, 1).is_none()); // no track 9
     }
 
-    #[test]
     fn rejects_a_file_with_the_wrong_signature() {
         let bytes = vec![0u8; BLOCK_SIZE];
         assert_eq!(parse(&bytes).unwrap_err(), Error::NotAStandardDskFile);
     }
 
-    #[test]
     fn rejects_a_truncated_file() {
         let mut bytes = build_minimal_dsk();
         bytes.truncate(bytes.len() - 100); // cut off the end of the sector data
         assert!(matches!(parse(&bytes), Err(Error::TruncatedTrack(0))));
+    }
+    /// Merged (every check kept): `rejects_a_file_with_the_wrong_signature`, `rejects_a_truncated_file`.
+    #[test]
+    fn rejects_bad_files() {
+        rejects_a_file_with_the_wrong_signature();
+        rejects_a_truncated_file();
     }
 
     /// One present track (256-byte sector) followed by one unformatted
@@ -765,7 +769,6 @@ mod tests {
         disk.read_sector(c, h, r).unwrap().data.clone()
     }
 
-    #[test]
     fn standard_dsk_round_trips_through_to_bytes() {
         let original = parse(&build_minimal_dsk()).unwrap();
         let bytes = original.to_bytes();
@@ -780,7 +783,6 @@ mod tests {
         assert_eq!(again.to_bytes(), bytes);
     }
 
-    #[test]
     fn extended_dsk_round_trips_including_unformatted_track() {
         let original = parse(&build_minimal_extended_dsk()).unwrap();
         let bytes = original.to_bytes();
@@ -798,7 +800,6 @@ mod tests {
         assert_eq!(again.to_bytes(), bytes);
     }
 
-    #[test]
     fn weak_sector_copies_survive_a_round_trip_as_extended_dsk() {
         let mut bytes = vec![0u8; BLOCK_SIZE];
         bytes[..DISC_SIGNATURE.len()].copy_from_slice(DISC_SIGNATURE);
@@ -824,7 +825,6 @@ mod tests {
         assert_eq!(s.copies[1][0], 0xBB);
     }
 
-    #[test]
     fn sector_st1_st2_flags_are_preserved() {
         let mut bytes = build_minimal_dsk();
         bytes[0x100 + 0x18 + 4] = 0x20; // ST1 data error
@@ -836,8 +836,15 @@ mod tests {
         let s = again.read_sector(0, 0, 1).unwrap();
         assert_eq!((s.st1, s.st2), (0x20, 0x40));
     }
-
+    /// Merged (every check kept): `standard_dsk_round_trips_through_to_bytes`, `extended_dsk_round_trips_including_unformatted_track`, `weak_sector_copies_survive_a_round_trip_as_extended_dsk`, `sector_st1_st2_flags_are_preserved`.
     #[test]
+    fn dsk_round_trips() {
+        standard_dsk_round_trips_through_to_bytes();
+        extended_dsk_round_trips_including_unformatted_track();
+        weak_sector_copies_survive_a_round_trip_as_extended_dsk();
+        sector_st1_st2_flags_are_preserved();
+    }
+
     fn write_sector_at_changes_data_sets_modified_and_survives_serialisation() {
         let mut disk = parse(&build_minimal_dsk()).unwrap();
         assert!(!disk.is_modified());
@@ -849,7 +856,6 @@ mod tests {
         assert!(!again.is_modified(), "a freshly parsed image is clean");
     }
 
-    #[test]
     fn write_sector_at_pads_short_data_and_can_mark_deleted() {
         let mut disk = parse(&build_minimal_dsk()).unwrap();
         assert!(disk.write_sector_at(0, 0, 0, &[1, 2, 3], true));
@@ -859,15 +865,20 @@ mod tests {
         assert_eq!(s.st2 & 0x40, 0x40);
     }
 
-    #[test]
     fn write_sector_at_rejects_a_missing_sector_or_track() {
         let mut disk = parse(&build_minimal_dsk()).unwrap();
         assert!(!disk.write_sector_at(0, 0, 5, &[0; 512], false));
         assert!(!disk.write_sector_at(9, 0, 0, &[0; 512], false));
         assert!(!disk.is_modified());
     }
-
+    /// Merged (every check kept): `write_sector_at_changes_data_sets_modified_and_survives_serialisation`, `write_sector_at_pads_short_data_and_can_mark_deleted`, `write_sector_at_rejects_a_missing_sector_or_track`.
     #[test]
+    fn write_sector_at_cases() {
+        write_sector_at_changes_data_sets_modified_and_survives_serialisation();
+        write_sector_at_pads_short_data_and_can_mark_deleted();
+        write_sector_at_rejects_a_missing_sector_or_track();
+    }
+
     fn format_track_replaces_a_track_and_serialises() {
         let mut disk = parse(&build_minimal_dsk()).unwrap();
         let ids = [[0, 0, 0xC1, 2], [0, 0, 0xC2, 2], [0, 0, 0xC3, 2]];
@@ -881,7 +892,6 @@ mod tests {
         assert_eq!(sector_bytes(&again, 0, 0, 0xC3), vec![0xE5; 512]);
     }
 
-    #[test]
     fn format_track_grows_the_image_to_a_new_cylinder() {
         let mut disk = parse(&build_minimal_dsk()).unwrap();
         assert_eq!(disk.cylinders(), 1);
@@ -893,12 +903,18 @@ mod tests {
         assert_eq!(sector_bytes(&again, 3, 0, 1), vec![0; 256]);
     }
 
-    #[test]
     fn format_track_rejects_an_unstored_head_or_absurd_cylinder() {
         let mut disk = parse(&build_minimal_dsk()).unwrap(); // one head
         assert!(!disk.format_track(0, 1, &[[0, 1, 1, 2]], 0x4E, 0));
         assert!(!disk.format_track(200, 0, &[[200, 0, 1, 2]], 0x4E, 0));
         assert!(!disk.is_modified());
+    }
+    /// Merged (every check kept): `format_track_replaces_a_track_and_serialises`, `format_track_grows_the_image_to_a_new_cylinder`, `format_track_rejects_an_unstored_head_or_absurd_cylinder`.
+    #[test]
+    fn format_track_cases() {
+        format_track_replaces_a_track_and_serialises();
+        format_track_grows_the_image_to_a_new_cylinder();
+        format_track_rejects_an_unstored_head_or_absurd_cylinder();
     }
 
     #[test]

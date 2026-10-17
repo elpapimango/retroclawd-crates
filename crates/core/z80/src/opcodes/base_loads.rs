@@ -187,7 +187,6 @@ mod tests {
     use super::*;
     use crate::test_support::FlatBus;
 
-    #[test]
     fn ld_bc_nn_loads_little_endian_immediate_and_takes_10_cycles() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -202,7 +201,6 @@ mod tests {
         assert_eq!(cpu.pc, 3);
     }
 
-    #[test]
     fn ld_de_nn_loads_immediate() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -215,7 +213,6 @@ mod tests {
         assert_eq!(cpu.de, 0x5678);
     }
 
-    #[test]
     fn ld_hl_nn_loads_hl_normally() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -244,7 +241,6 @@ mod tests {
         assert_eq!(cpu.hl, 0); // real HL untouched
     }
 
-    #[test]
     fn ld_sp_nn_loads_immediate() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -257,8 +253,15 @@ mod tests {
         assert_eq!(cycles, 10);
         assert_eq!(cpu.sp, 0x8000);
     }
-
+    /// Merged (every check kept): `ld_bc_nn_loads_little_endian_immediate_and_takes_10_cycles`, `ld_de_nn_loads_immediate`, `ld_hl_nn_loads_hl_normally`, `ld_sp_nn_loads_immediate`.
     #[test]
+    fn ld_rr_nn_loads_immediate() {
+        ld_bc_nn_loads_little_endian_immediate_and_takes_10_cycles();
+        ld_de_nn_loads_immediate();
+        ld_hl_nn_loads_hl_normally();
+        ld_sp_nn_loads_immediate();
+    }
+
     fn ld_bc_ind_a_writes_a_to_bc_address_and_takes_7_cycles() {
         let mut cpu = Cpu::new();
         cpu.bc = 0x2000;
@@ -272,7 +275,6 @@ mod tests {
         assert_eq!(bus.read(0x2000), 0x42);
     }
 
-    #[test]
     fn ld_de_ind_a_writes_a_to_de_address() {
         let mut cpu = Cpu::new();
         cpu.de = 0x3000;
@@ -283,6 +285,12 @@ mod tests {
         cpu.step(&mut bus);
 
         assert_eq!(bus.read(0x3000), 0x99);
+    }
+    /// Merged (every check kept): `ld_bc_ind_a_writes_a_to_bc_address_and_takes_7_cycles`, `ld_de_ind_a_writes_a_to_de_address`.
+    #[test]
+    fn ld_bc_and_de_ind_a_write_a() {
+        ld_bc_ind_a_writes_a_to_bc_address_and_takes_7_cycles();
+        ld_de_ind_a_writes_a_to_de_address();
     }
 
     #[test]
@@ -300,7 +308,6 @@ mod tests {
         assert_eq!(bus.read(0x4000), 0x55);
     }
 
-    #[test]
     fn ld_a_bc_ind_reads_from_bc_address_and_takes_7_cycles() {
         let mut cpu = Cpu::new();
         cpu.bc = 0x2000;
@@ -314,7 +321,6 @@ mod tests {
         assert_eq!(cpu.a(), 0x77);
     }
 
-    #[test]
     fn ld_a_de_ind_reads_from_de_address() {
         let mut cpu = Cpu::new();
         cpu.de = 0x3000;
@@ -325,6 +331,12 @@ mod tests {
         cpu.step(&mut bus);
 
         assert_eq!(cpu.a(), 0x88);
+    }
+    /// Merged (every check kept): `ld_a_bc_ind_reads_from_bc_address_and_takes_7_cycles`, `ld_a_de_ind_reads_from_de_address`.
+    #[test]
+    fn ld_a_bc_and_de_ind_read_a() {
+        ld_a_bc_ind_reads_from_bc_address_and_takes_7_cycles();
+        ld_a_de_ind_reads_from_de_address();
     }
 
     #[test]
@@ -392,7 +404,6 @@ mod tests {
         assert_eq!(cpu.hl, 0);
     }
 
-    #[test]
     fn ld_b_n_loads_immediate_and_takes_7_cycles() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -405,7 +416,6 @@ mod tests {
         assert_eq!(cpu.b(), 0x42);
     }
 
-    #[test]
     fn ld_c_n_loads_immediate() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -417,7 +427,6 @@ mod tests {
         assert_eq!(cpu.c(), 0x11);
     }
 
-    #[test]
     fn ld_d_n_loads_immediate() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -429,7 +438,6 @@ mod tests {
         assert_eq!(cpu.d(), 0x22);
     }
 
-    #[test]
     fn ld_e_n_loads_immediate() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -441,7 +449,6 @@ mod tests {
         assert_eq!(cpu.e(), 0x33);
     }
 
-    #[test]
     fn ld_h_n_loads_immediate() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -453,7 +460,6 @@ mod tests {
         assert_eq!(cpu.h(), 0x44);
     }
 
-    #[test]
     fn ld_l_n_loads_immediate() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -463,6 +469,16 @@ mod tests {
         cpu.step(&mut bus);
 
         assert_eq!(cpu.l(), 0x55);
+    }
+    /// Merged (every check kept): `ld_b_n_loads_immediate_and_takes_7_cycles`, `ld_c_n_loads_immediate`, `ld_d_n_loads_immediate`, `ld_e_n_loads_immediate`, `ld_h_n_loads_immediate`, `ld_l_n_loads_immediate`.
+    #[test]
+    fn ld_r_n_loads_immediate() {
+        ld_b_n_loads_immediate_and_takes_7_cycles();
+        ld_c_n_loads_immediate();
+        ld_d_n_loads_immediate();
+        ld_e_n_loads_immediate();
+        ld_h_n_loads_immediate();
+        ld_l_n_loads_immediate();
     }
 
     #[test]

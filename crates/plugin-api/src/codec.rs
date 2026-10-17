@@ -114,7 +114,6 @@ mod tests {
         assert_eq!(decoded, command);
     }
 
-    #[test]
     fn decode_message_rejects_version_mismatch() {
         let bytes = encode(&ProtocolEnvelope {
             protocol_version: PROTOCOL_VERSION + 1,
@@ -132,7 +131,6 @@ mod tests {
         ));
     }
 
-    #[test]
     fn the_version_is_reported_even_when_the_payload_has_another_shape() {
         // A skewed plugin: right envelope, a payload this schema cannot read.
         let bytes = encode(&ProtocolEnvelope {
@@ -147,11 +145,17 @@ mod tests {
         );
     }
 
-    #[test]
     fn the_envelope_starts_with_the_version_as_a_varint() {
         // Frozen wire fact the pre-payload version check relies on.
         let bytes = encode_message(&MachineCommand::GetPc).expect("encode");
         assert_eq!(bytes[0] as u16, PROTOCOL_VERSION);
+    }
+    /// Merged (every check kept): `decode_message_rejects_version_mismatch`, `the_version_is_reported_even_when_the_payload_has_another_shape`, `the_envelope_starts_with_the_version_as_a_varint`.
+    #[test]
+    fn codec_version_envelope() {
+        decode_message_rejects_version_mismatch();
+        the_version_is_reported_even_when_the_payload_has_another_shape();
+        the_envelope_starts_with_the_version_as_a_varint();
     }
 
     #[test]

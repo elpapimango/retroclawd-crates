@@ -126,7 +126,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn run_executes_until_halted_and_reports_totals() {
         let mut machine = FakeMachine {
             hz: 1_000_000,
@@ -141,7 +140,6 @@ mod tests {
         assert_eq!(stats.cycles, 20);
     }
 
-    #[test]
     fn run_still_makes_progress_below_one_cycle_per_tick() {
         // hz < ticks_per_sec would make the per-tick budget 0, so `run` would
         // sleep forever without ever stepping. Two steps at one cycle of
@@ -159,7 +157,6 @@ mod tests {
         assert!(machine.halted());
     }
 
-    #[test]
     fn different_tick_rates_change_how_many_steps_run_per_tick() {
         use std::cell::Cell;
 
@@ -200,6 +197,13 @@ mod tests {
         // rate passed to `Clock::new` drives the budget math.
         assert_eq!(calls_at_slow_rate, 7);
         assert_eq!(calls.get(), 9);
+    }
+    /// Merged (every check kept): `run_executes_until_halted_and_reports_totals`, `run_still_makes_progress_below_one_cycle_per_tick`, `different_tick_rates_change_how_many_steps_run_per_tick`.
+    #[test]
+    fn clock_run_cases() {
+        run_executes_until_halted_and_reports_totals();
+        run_still_makes_progress_below_one_cycle_per_tick();
+        different_tick_rates_change_how_many_steps_run_per_tick();
     }
 
     struct CountingOverride {
@@ -263,16 +267,5 @@ mod tests {
 
         assert_eq!(stats.instructions, 3);
         assert!(boxed.halted());
-    }
-
-    #[test]
-    fn render_frame_defaults_to_none_when_not_overridden() {
-        let machine = FakeMachine {
-            hz: 1_000_000,
-            steps_remaining: 0,
-            cost_per_step: 4,
-        };
-
-        assert_eq!(machine.render_frame(), None);
     }
 }

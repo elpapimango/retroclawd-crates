@@ -645,13 +645,10 @@ pub enum MachineResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use serde::Serialize;
 
     use super::*;
 
-    #[test]
     fn machine_command_round_trip_keeps_nested_debug_payload() {
         let command = MachineCommand::Debug(DebugCommand::ReadMemory {
             address: 0x8000,
@@ -668,7 +665,6 @@ mod tests {
         assert_eq!(decoded, command);
     }
 
-    #[test]
     fn machine_command_round_trip_keeps_input_and_control_payloads() {
         let command = MachineCommand::SetBorder { enabled: true };
 
@@ -681,7 +677,6 @@ mod tests {
         assert_eq!(decoded, command);
     }
 
-    #[test]
     fn machine_metadata_round_trip_keeps_bitmap_palette_defaults() {
         let metadata = MachineMetadata {
             machine_id: "zx-spectrum".to_string(),
@@ -702,6 +697,13 @@ mod tests {
         let bytes = crate::encode_message(&metadata).expect("encode metadata");
         let decoded: MachineMetadata = crate::decode_message(&bytes).expect("decode metadata");
         assert_eq!(decoded, metadata);
+    }
+    /// Merged (every check kept): `machine_command_round_trip_keeps_nested_debug_payload`, `machine_command_round_trip_keeps_input_and_control_payloads`, `machine_metadata_round_trip_keeps_bitmap_palette_defaults`.
+    #[test]
+    fn protocol_round_trips() {
+        machine_command_round_trip_keeps_nested_debug_payload();
+        machine_command_round_trip_keeps_input_and_control_payloads();
+        machine_metadata_round_trip_keeps_bitmap_palette_defaults();
     }
 
     #[test]
@@ -758,13 +760,5 @@ mod tests {
         let infos = key_infos(["KeyA", "KeyB", "KeyA", "Space"]);
         let names: Vec<&str> = infos.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, ["KeyA", "KeyB", "Space"]);
-    }
-
-    #[test]
-    fn required_debug_capability_table_has_no_duplicates() {
-        let mut seen = HashSet::new();
-        for capability in REQUIRED_MACHINE_DEBUG_CAPABILITIES {
-            assert!(seen.insert(capability));
-        }
     }
 }

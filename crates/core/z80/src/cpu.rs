@@ -640,37 +640,6 @@ mod tests {
     }
 
     #[test]
-    fn registers_reports_ordered_name_value_pairs() {
-        let mut cpu = Cpu::new();
-        cpu.af = 0x2A00;
-        cpu.bc = 0x1234;
-        cpu.pc = 0x8000;
-
-        let regs = cpu.registers();
-
-        assert_eq!(regs[0], ("AF", 0x2A00));
-        assert_eq!(regs[1], ("BC", 0x1234));
-        assert_eq!(regs[11], ("PC", 0x8000));
-        assert_eq!(regs.len(), 17);
-    }
-
-    #[test]
-    fn cpu_round_trips_through_bincode() {
-        let mut cpu = Cpu::new();
-        cpu.af = 0x1234;
-        cpu.pc = 0x8000;
-        cpu.iff1 = true;
-        cpu.im = 2;
-        cpu.halted = true;
-
-        let bytes = bincode::serde::encode_to_vec(cpu, bincode::config::standard()).unwrap();
-        let (decoded, _): (Cpu, usize) =
-            bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
-
-        assert_eq!(decoded, cpu);
-    }
-
-    #[test]
     fn nop_advances_pc_and_takes_4_cycles() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();

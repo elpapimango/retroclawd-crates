@@ -348,7 +348,6 @@ mod tests {
         ])
     }
 
-    #[test]
     fn annotates_six_five_o_two_and_z80_address_styles() {
         let t = table();
         assert_eq!(t.annotate("JSR $FFD2"), "JSR $FFD2  ; CHROUT");
@@ -360,7 +359,6 @@ mod tests {
         assert_eq!(t.annotate("CALL NZ,0x0556"), "CALL NZ,0x0556  ; LD_BYTES");
     }
 
-    #[test]
     fn leaves_values_that_are_not_addresses_alone() {
         let t = table();
         assert_eq!(t.annotate("LDA #$C6"), "LDA #$C6"); // an immediate, not the zero-page cell
@@ -370,8 +368,13 @@ mod tests {
         assert_eq!(t.annotate("JSR $FFD2  ; mine"), "JSR $FFD2  ; mine"); // already commented
         assert_eq!(SymbolTable::new().annotate("JSR $FFD2"), "JSR $FFD2");
     }
-
+    /// Merged (every check kept): `annotates_six_five_o_two_and_z80_address_styles`, `leaves_values_that_are_not_addresses_alone`.
     #[test]
+    fn address_annotation() {
+        annotates_six_five_o_two_and_z80_address_styles();
+        leaves_values_that_are_not_addresses_alone();
+    }
+
     fn parses_assembler_map_and_vice_formats() {
         let text = "; comment
 CHROUT = $FFD2
@@ -395,7 +398,6 @@ al d800 .colour
         assert_eq!(t.len(), 8);
     }
 
-    #[test]
     fn a_bad_line_is_an_error_with_its_line_number() {
         let err = SymbolTable::parse("OK = $10\nthis is not a symbol line\n").unwrap_err();
         assert!(err.contains("line 2"), "{err}");
@@ -411,11 +413,17 @@ al d800 .colour
         );
     }
 
-    #[test]
     fn later_entries_replace_earlier_ones() {
         let mut t = table();
         t.merge(&SymbolTable::from_entries(&[(0xFFD2, "PRINT_CHAR")]));
         assert_eq!(t.annotate("JSR $FFD2"), "JSR $FFD2  ; PRINT_CHAR");
+    }
+    /// Merged (every check kept): `parses_assembler_map_and_vice_formats`, `a_bad_line_is_an_error_with_its_line_number`, `later_entries_replace_earlier_ones`.
+    #[test]
+    fn symbol_file_parsing() {
+        parses_assembler_map_and_vice_formats();
+        a_bad_line_is_an_error_with_its_line_number();
+        later_entries_replace_earlier_ones();
     }
 
     #[test]

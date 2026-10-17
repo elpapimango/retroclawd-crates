@@ -1825,7 +1825,6 @@ impl TapePlayer {
 mod tests {
     use super::*;
 
-    #[test]
     fn parse_tap_synthesizes_the_standard_pilot_sync_and_bit_pulses() {
         // Minimal 1-byte block: flag byte 0x00 (header -> 8063 pilot
         // pulses per the verified standard protocol), all bits zero.
@@ -1906,7 +1905,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_tap_uses_data_pilot_count_when_flag_byte_is_128_or_above() {
         let bytes = [0x01, 0x00, 0xFF]; // flag byte 0xFF (>= 128) -> data block
         let tape = parse_tap(&bytes).unwrap();
@@ -1916,13 +1914,11 @@ mod tests {
         assert_eq!(tape.events.len(), 3223 + 2 + 16 + 2);
     }
 
-    #[test]
     fn parse_tap_rejects_a_truncated_block() {
         let bytes = [0x05, 0x00, 0x01, 0x02]; // claims len=5, only 2 bytes follow
         assert_eq!(parse_tap(&bytes), Err(Error::TruncatedBlock));
     }
 
-    #[test]
     fn parse_tap_handles_multiple_blocks() {
         // Two 1-byte blocks back to back.
         let bytes = [0x01, 0x00, 0x00, 0x01, 0x00, 0xFF];
@@ -1932,8 +1928,15 @@ mod tests {
         let second_block_len = 3223 + 2 + 16 + 2;
         assert_eq!(tape.events.len(), first_block_len + second_block_len);
     }
-
+    /// Merged (every check kept): `parse_tap_synthesizes_the_standard_pilot_sync_and_bit_pulses`, `parse_tap_uses_data_pilot_count_when_flag_byte_is_128_or_above`, `parse_tap_rejects_a_truncated_block`, `parse_tap_handles_multiple_blocks`.
     #[test]
+    fn parse_tap_cases() {
+        parse_tap_synthesizes_the_standard_pilot_sync_and_bit_pulses();
+        parse_tap_uses_data_pilot_count_when_flag_byte_is_128_or_above();
+        parse_tap_rejects_a_truncated_block();
+        parse_tap_handles_multiple_blocks();
+    }
+
     fn tape_player_reports_idle_level_until_played() {
         let tape = Tape {
             events: vec![Event::Pulse(Pulse {
@@ -1948,7 +1951,6 @@ mod tests {
         assert!(player.ear_bit()); // idle -- not playing yet
     }
 
-    #[test]
     fn tape_player_advances_through_pulses_as_it_ticks() {
         let tape = Tape {
             events: vec![
@@ -1976,7 +1978,6 @@ mod tests {
         assert!(player.ear_bit()); // idle level once finished
     }
 
-    #[test]
     fn tape_player_speed_multiplier_compresses_real_elapsed_time() {
         let tape = Tape {
             events: vec![Event::Pulse(Pulse {
@@ -1992,8 +1993,14 @@ mod tests {
         player.tick(25); // 25 real cycles * 4x = 100 effective cycles
         assert!(player.finished());
     }
-
+    /// Merged (every check kept): `tape_player_reports_idle_level_until_played`, `tape_player_advances_through_pulses_as_it_ticks`, `tape_player_speed_multiplier_compresses_real_elapsed_time`.
     #[test]
+    fn tape_player_playback() {
+        tape_player_reports_idle_level_until_played();
+        tape_player_advances_through_pulses_as_it_ticks();
+        tape_player_speed_multiplier_compresses_real_elapsed_time();
+    }
+
     fn tape_player_stops_at_a_stop_event_and_resumes_on_play() {
         let tape = Tape {
             events: vec![
@@ -2021,7 +2028,6 @@ mod tests {
         assert!(!player.ear_bit()); // now on the third event immediately
     }
 
-    #[test]
     fn tape_player_play_is_a_no_op_once_finished() {
         let tape = Tape {
             events: vec![Event::Pulse(Pulse {
@@ -2038,8 +2044,13 @@ mod tests {
         player.play(); // no-op: nothing left to play
         assert!(player.ear_bit()); // still idle
     }
-
+    /// Merged (every check kept): `tape_player_stops_at_a_stop_event_and_resumes_on_play`, `tape_player_play_is_a_no_op_once_finished`.
     #[test]
+    fn tape_player_stop_and_finish() {
+        tape_player_stops_at_a_stop_event_and_resumes_on_play();
+        tape_player_play_is_a_no_op_once_finished();
+    }
+
     fn take_next_raw_block_returns_blocks_in_order_then_none_when_exhausted() {
         let bytes = [0x01, 0x00, 0x00, 0x01, 0x00, 0xFF];
         let tape = parse_tap(&bytes).unwrap();
@@ -2050,7 +2061,6 @@ mod tests {
         assert_eq!(player.take_next_raw_block(), None);
     }
 
-    #[test]
     fn take_next_raw_block_fast_forwards_real_time_playback_past_the_consumed_block() {
         let bytes = [0x01, 0x00, 0x00, 0x01, 0x00, 0xFF];
         let tape = parse_tap(&bytes).unwrap();
@@ -2065,7 +2075,6 @@ mod tests {
         assert!(!player.ear_bit());
     }
 
-    #[test]
     fn take_next_raw_block_returns_none_when_position_is_inside_a_turbo_block() {
         // A Turbo Speed Data Block between two standard blocks must not be
         // mistaken for the standard block preceding it.
@@ -2094,6 +2103,13 @@ mod tests {
         // Playback position now sits right at the turbo block's own first
         // pulse -- not a standard block, so nothing more to trap.
         assert_eq!(player.take_next_raw_block(), None);
+    }
+    /// Merged (every check kept): `take_next_raw_block_returns_blocks_in_order_then_none_when_exhausted`, `take_next_raw_block_fast_forwards_real_time_playback_past_the_consumed_block`, `take_next_raw_block_returns_none_when_position_is_inside_a_turbo_block`.
+    #[test]
+    fn take_next_raw_block_cases() {
+        take_next_raw_block_returns_blocks_in_order_then_none_when_exhausted();
+        take_next_raw_block_fast_forwards_real_time_playback_past_the_consumed_block();
+        take_next_raw_block_returns_none_when_position_is_inside_a_turbo_block();
     }
 
     fn tzx_header() -> Vec<u8> {
@@ -2154,7 +2170,6 @@ mod tests {
         parse_tzx(&bytes).unwrap()
     }
 
-    #[test]
     fn a_pause_after_a_high_last_pulse_needs_no_extra_edge() {
         // Data starting on the initial (low) level: 16 pulses, the last one
         // high -- the drop into low silence is already an edge.
@@ -2179,7 +2194,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_pause_after_a_low_last_pulse_opens_with_a_one_ms_terminating_edge() {
         // One flipping pulse, then 16 data pulses starting high: the last is
         // low, and low silence after it has no edge to end that pulse.
@@ -2212,7 +2226,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_pause_of_one_ms_or_less_after_a_low_pulse_is_just_the_edge() {
         let tape = flipped_pure_data_tape(&[0x00], 8, 1);
         assert_eq!(
@@ -2226,7 +2239,6 @@ mod tests {
         assert_eq!(tape.events.len(), 1 + 16 + 1);
     }
 
-    #[test]
     fn a_standalone_pause_block_after_a_low_pulse_gets_the_terminating_edge_too() {
         let mut bytes = tzx_header();
         bytes.extend_from_slice(&[0x13, 2]); // two pulses: the last is high (level false->true)
@@ -2253,6 +2265,14 @@ mod tests {
                 level: false
             })
         );
+    }
+    /// Merged (every check kept): `a_pause_after_a_high_last_pulse_needs_no_extra_edge`, `a_pause_after_a_low_last_pulse_opens_with_a_one_ms_terminating_edge`, `a_pause_of_one_ms_or_less_after_a_low_pulse_is_just_the_edge`, `a_standalone_pause_block_after_a_low_pulse_gets_the_terminating_edge_too`.
+    #[test]
+    fn pause_terminating_edges() {
+        a_pause_after_a_high_last_pulse_needs_no_extra_edge();
+        a_pause_after_a_low_last_pulse_opens_with_a_one_ms_terminating_edge();
+        a_pause_of_one_ms_or_less_after_a_low_pulse_is_just_the_edge();
+        a_standalone_pause_block_after_a_low_pulse_gets_the_terminating_edge_too();
     }
 
     #[test]
@@ -2348,7 +2368,6 @@ mod tests {
         assert!(matches!(tape.events[at + 1], Event::Pulse(_)));
     }
 
-    #[test]
     fn parse_tzx_turbo_speed_block_uses_the_blocks_own_timing_and_used_bits() {
         let mut bytes = tzx_header();
         bytes.push(0x11); // Turbo Speed Data Block
@@ -2376,7 +2395,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_tzx_pure_tone_block_emits_fixed_width_alternating_pulses() {
         let mut bytes = tzx_header();
         bytes.push(0x12); // Pure Tone
@@ -2405,7 +2423,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_tzx_pulse_sequence_block_uses_each_declared_pulse_duration() {
         let mut bytes = tzx_header();
         bytes.push(0x13); // Pulse Sequence
@@ -2435,7 +2452,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_tzx_pure_data_block_encodes_bits_without_pilot_or_sync() {
         let mut bytes = tzx_header();
         bytes.push(0x14); // Pure Data Block
@@ -2484,8 +2500,15 @@ mod tests {
             ]
         );
     }
-
+    /// Merged (every check kept): `parse_tzx_turbo_speed_block_uses_the_blocks_own_timing_and_used_bits`, `parse_tzx_pure_tone_block_emits_fixed_width_alternating_pulses`, `parse_tzx_pulse_sequence_block_uses_each_declared_pulse_duration`, `parse_tzx_pure_data_block_encodes_bits_without_pilot_or_sync`.
     #[test]
+    fn tzx_pulse_blocks() {
+        parse_tzx_turbo_speed_block_uses_the_blocks_own_timing_and_used_bits();
+        parse_tzx_pure_tone_block_emits_fixed_width_alternating_pulses();
+        parse_tzx_pulse_sequence_block_uses_each_declared_pulse_duration();
+        parse_tzx_pure_data_block_encodes_bits_without_pilot_or_sync();
+    }
+
     fn parse_tzx_pause_block_with_nonzero_duration_is_a_low_pulse() {
         let mut bytes = tzx_header();
         bytes.push(0x20); // Pause/Stop the tape
@@ -2504,7 +2527,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_tzx_turbo_block_with_zero_pause_adds_no_zero_duration_event() {
         let mut bytes = tzx_header();
         bytes.push(0x11); // Turbo Speed Data Block
@@ -2524,7 +2546,6 @@ mod tests {
         // 100 pilot + 2 sync + 8 bits * 2 pulses; no trailing pause event.
         assert_eq!(tape.event_count(), 100 + 2 + 16);
     }
-    #[test]
     fn parse_tzx_pause_block_with_zero_duration_is_a_stop_event() {
         let mut bytes = tzx_header();
         bytes.push(0x20);
@@ -2534,8 +2555,14 @@ mod tests {
 
         assert_eq!(tape.events, vec![Event::Stop]);
     }
-
+    /// Merged (every check kept): `parse_tzx_pause_block_with_nonzero_duration_is_a_low_pulse`, `parse_tzx_turbo_block_with_zero_pause_adds_no_zero_duration_event`, `parse_tzx_pause_block_with_zero_duration_is_a_stop_event`.
     #[test]
+    fn tzx_pause_blocks() {
+        parse_tzx_pause_block_with_nonzero_duration_is_a_low_pulse();
+        parse_tzx_turbo_block_with_zero_pause_adds_no_zero_duration_event();
+        parse_tzx_pause_block_with_zero_duration_is_a_stop_event();
+    }
+
     fn parse_tzx_skips_group_start_and_end_blocks() {
         let mut bytes = tzx_header();
         bytes.push(0x21); // Group start
@@ -2548,7 +2575,6 @@ mod tests {
         assert_eq!(tape.events.len(), 0);
     }
 
-    #[test]
     fn parse_tzx_errors_clearly_on_an_unimplemented_block_type() {
         let mut bytes = tzx_header();
         // Custom info: its identification-string length is disputed between
@@ -2558,7 +2584,6 @@ mod tests {
         assert_eq!(parse_tzx(&bytes), Err(Error::UnsupportedBlockType(0x35)));
     }
 
-    #[test]
     fn parse_tzx_skips_informational_blocks_without_producing_pulses() {
         let mut bytes = tzx_header();
         bytes.push(0x33); // Hardware type: 2 entries of (type, id, info)
@@ -2589,7 +2614,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_tzx_rejects_a_truncated_informational_block() {
         for body in [
             vec![0x30, 9, b'a'],    // text shorter than its length
@@ -2602,6 +2626,14 @@ mod tests {
             bytes.extend_from_slice(&body);
             assert_eq!(parse_tzx(&bytes), Err(Error::TruncatedBlock), "{body:02X?}");
         }
+    }
+    /// Merged (every check kept): `parse_tzx_skips_group_start_and_end_blocks`, `parse_tzx_skips_informational_blocks_without_producing_pulses`, `parse_tzx_rejects_a_truncated_informational_block`, `parse_tzx_errors_clearly_on_an_unimplemented_block_type`.
+    #[test]
+    fn tzx_skipped_and_rejected_blocks() {
+        parse_tzx_skips_group_start_and_end_blocks();
+        parse_tzx_skips_informational_blocks_without_producing_pulses();
+        parse_tzx_rejects_a_truncated_informational_block();
+        parse_tzx_errors_clearly_on_an_unimplemented_block_type();
     }
 
     fn pzxt_header() -> Vec<u8> {
@@ -2620,12 +2652,10 @@ mod tests {
         bytes.extend_from_slice(data);
     }
 
-    #[test]
     fn parse_pzx_rejects_a_file_without_the_pzxt_header() {
         assert_eq!(parse_pzx(&[0u8; 8]), Err(Error::NotAPzxFile));
     }
 
-    #[test]
     fn parse_pzx_puls_block_decodes_plain_pulses_without_repeat_count() {
         let mut bytes = pzxt_header();
         let mut data = Vec::new();
@@ -2650,7 +2680,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_pzx_puls_block_honors_an_explicit_repeat_count() {
         let mut bytes = pzxt_header();
         let mut data = Vec::new();
@@ -2678,8 +2707,13 @@ mod tests {
             ]
         );
     }
-
+    /// Merged (every check kept): `parse_pzx_puls_block_decodes_plain_pulses_without_repeat_count`, `parse_pzx_puls_block_honors_an_explicit_repeat_count`.
     #[test]
+    fn pzx_puls_blocks() {
+        parse_pzx_puls_block_decodes_plain_pulses_without_repeat_count();
+        parse_pzx_puls_block_honors_an_explicit_repeat_count();
+    }
+
     fn parse_pzx_data_block_encodes_one_bit_via_the_standard_sequences() {
         let mut bytes = pzxt_header();
         let mut data = Vec::new();
@@ -2716,7 +2750,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_pzx_paus_block_decodes_duration_and_level() {
         let mut bytes = pzxt_header();
         let raw = 0x8000_0064u32; // duration=100, level high
@@ -2733,7 +2766,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_pzx_stop_block_becomes_a_stop_event() {
         let mut bytes = pzxt_header();
         push_pzx_block(&mut bytes, b"STOP", &0u16.to_le_bytes());
@@ -2742,8 +2774,14 @@ mod tests {
 
         assert_eq!(tape.events, vec![Event::Stop]);
     }
-
+    /// Merged (every check kept): `parse_pzx_data_block_encodes_one_bit_via_the_standard_sequences`, `parse_pzx_paus_block_decodes_duration_and_level`, `parse_pzx_stop_block_becomes_a_stop_event`.
     #[test]
+    fn pzx_data_pause_stop() {
+        parse_pzx_data_block_encodes_one_bit_via_the_standard_sequences();
+        parse_pzx_paus_block_decodes_duration_and_level();
+        parse_pzx_stop_block_becomes_a_stop_event();
+    }
+
     fn parse_pzx_skips_an_unrecognized_block_without_erroring() {
         let mut bytes = pzxt_header();
         push_pzx_block(&mut bytes, b"XYZZ", &[0xDE, 0xAD, 0xBE, 0xEF]);
@@ -2760,7 +2798,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_pzx_does_not_populate_raw_blocks_for_the_fast_load_trap() {
         let mut bytes = pzxt_header();
         push_pzx_block(&mut bytes, b"PAUS", &0x0000_0064u32.to_le_bytes());
@@ -2769,6 +2806,13 @@ mod tests {
         let mut player = TapePlayer::new(tape);
 
         assert_eq!(player.take_next_raw_block(), None);
+    }
+    /// Merged (every check kept): `parse_pzx_rejects_a_file_without_the_pzxt_header`, `parse_pzx_skips_an_unrecognized_block_without_erroring`, `parse_pzx_does_not_populate_raw_blocks_for_the_fast_load_trap`.
+    #[test]
+    fn pzx_framing() {
+        parse_pzx_rejects_a_file_without_the_pzxt_header();
+        parse_pzx_skips_an_unrecognized_block_without_erroring();
+        parse_pzx_does_not_populate_raw_blocks_for_the_fast_load_trap();
     }
 
     fn csw_v1_header(sample_rate: u16, compression_type: u8, flags: u8) -> Vec<u8> {
@@ -2800,13 +2844,11 @@ mod tests {
         bytes
     }
 
-    #[test]
     fn parse_csw_rejects_a_file_without_the_signature() {
         let bytes = b"not a csw file at all".to_vec();
         assert_eq!(parse_csw(&bytes), Err(Error::NotACswFile));
     }
 
-    #[test]
     fn parse_csw_v1_decodes_rle_pulses_starting_high() {
         let mut bytes = csw_v1_header(44100, 1, 0x01); // flags bit0 = initial polarity high
         bytes.extend_from_slice(&[10, 20]);
@@ -2828,7 +2870,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_csw_v1_decodes_the_extended_duration_escape_byte() {
         let mut bytes = csw_v1_header(44100, 1, 0x00);
         bytes.push(0x00);
@@ -2845,7 +2886,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_csw_v2_rle_decodes_pulses() {
         let mut bytes = csw_v2_header(44100, 1, 0x00);
         bytes.extend_from_slice(&[5, 15, 25]);
@@ -2862,7 +2902,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn parse_csw_v2_z_rle_inflates_zlib_compressed_pulses() {
         use std::io::Write;
         let raw_pulses = [7u8, 14, 21, 28];
@@ -2889,8 +2928,15 @@ mod tests {
             level = !level;
         }
     }
-
+    /// Merged (every check kept): `parse_csw_v1_decodes_rle_pulses_starting_high`, `parse_csw_v1_decodes_the_extended_duration_escape_byte`, `parse_csw_v2_rle_decodes_pulses`, `parse_csw_v2_z_rle_inflates_zlib_compressed_pulses`.
     #[test]
+    fn csw_decoding() {
+        parse_csw_v1_decodes_rle_pulses_starting_high();
+        parse_csw_v1_decodes_the_extended_duration_escape_byte();
+        parse_csw_v2_rle_decodes_pulses();
+        parse_csw_v2_z_rle_inflates_zlib_compressed_pulses();
+    }
+
     fn parse_csw_rejects_an_unsupported_major_version() {
         let mut bytes = b"Compressed Square Wave".to_vec();
         bytes.push(0x1A);
@@ -2899,13 +2945,11 @@ mod tests {
         assert_eq!(parse_csw(&bytes), Err(Error::UnsupportedCswVersion(9)));
     }
 
-    #[test]
     fn parse_csw_rejects_an_unsupported_compression_type() {
         let bytes = csw_v1_header(44100, 3, 0x00);
         assert_eq!(parse_csw(&bytes), Err(Error::UnsupportedCswCompression(3)));
     }
 
-    #[test]
     fn parse_csw_does_not_populate_raw_blocks_for_the_fast_load_trap() {
         let mut bytes = csw_v1_header(44100, 1, 0x00);
         bytes.extend_from_slice(&[10]);
@@ -2914,6 +2958,14 @@ mod tests {
         let mut player = TapePlayer::new(tape);
 
         assert_eq!(player.take_next_raw_block(), None);
+    }
+    /// Merged (every check kept): `parse_csw_rejects_a_file_without_the_signature`, `parse_csw_rejects_an_unsupported_major_version`, `parse_csw_rejects_an_unsupported_compression_type`, `parse_csw_does_not_populate_raw_blocks_for_the_fast_load_trap`.
+    #[test]
+    fn csw_rejections_and_raw_blocks() {
+        parse_csw_rejects_a_file_without_the_signature();
+        parse_csw_rejects_an_unsupported_major_version();
+        parse_csw_rejects_an_unsupported_compression_type();
+        parse_csw_does_not_populate_raw_blocks_for_the_fast_load_trap();
     }
 
     #[test]
@@ -3006,7 +3058,6 @@ mod tests {
         assert_eq!(player.cycles_until_next_edge(), Some(23));
     }
 
-    #[test]
     fn parse_voc_header_and_one_pulse() {
         // Build minimal VOC file with header + one 0x01 Sound Data block containing 2 low + 2 high samples
         let mut voc = Vec::new();
@@ -3042,7 +3093,6 @@ mod tests {
         // Should have 2 pulses: one for low level, one for high level
     }
 
-    #[test]
     fn parse_voc_rejects_bad_checksum() {
         let mut voc = Vec::new();
         voc.extend_from_slice(b"Creative Voice File\x1A");
@@ -3054,7 +3104,6 @@ mod tests {
         assert_eq!(parse_voc(&voc), Err(Error::NotAVocFile));
     }
 
-    #[test]
     fn parse_voc_rejects_unsupported_codec() {
         let mut voc = Vec::new();
         voc.extend_from_slice(b"Creative Voice File\x1A");
@@ -3070,8 +3119,13 @@ mod tests {
 
         assert_eq!(parse_voc(&voc), Err(Error::UnsupportedVocCodec(0x01)));
     }
-
+    /// Merged (every check kept): `parse_voc_rejects_bad_checksum`, `parse_voc_rejects_unsupported_codec`.
     #[test]
+    fn voc_rejections() {
+        parse_voc_rejects_bad_checksum();
+        parse_voc_rejects_unsupported_codec();
+    }
+
     fn parse_voc_silence_emits_long_pulse() {
         let mut voc = Vec::new();
         voc.extend_from_slice(b"Creative Voice File\x1A");
@@ -3091,7 +3145,6 @@ mod tests {
         // Should have one pulse representing the silence
     }
 
-    #[test]
     fn parse_voc_repeat_unrolls() {
         let mut voc = Vec::new();
         voc.extend_from_slice(b"Creative Voice File\x1A");
@@ -3121,7 +3174,6 @@ mod tests {
         assert!(tape.event_count() >= 1);
     }
 
-    #[test]
     fn parse_voc_extra_info_changes_rate() {
         let mut voc = Vec::new();
         voc.extend_from_slice(b"Creative Voice File\x1A");
@@ -3150,6 +3202,14 @@ mod tests {
         let tape = parse_voc(&voc).expect("parse_voc extra_info failed");
         assert!(tape.event_count() > 0);
     }
+    /// Merged (every check kept): `parse_voc_header_and_one_pulse`, `parse_voc_silence_emits_long_pulse`, `parse_voc_repeat_unrolls`, `parse_voc_extra_info_changes_rate`.
+    #[test]
+    fn voc_parsing() {
+        parse_voc_header_and_one_pulse();
+        parse_voc_silence_emits_long_pulse();
+        parse_voc_repeat_unrolls();
+        parse_voc_extra_info_changes_rate();
+    }
 
     fn pulses_of(tape: &Tape) -> Vec<(u32, bool)> {
         tape.events()
@@ -3161,7 +3221,6 @@ mod tests {
             .collect()
     }
 
-    #[test]
     fn write_tzx_round_trips_alternating_pulses() {
         let recorded: Vec<Pulse> = (0..600u32)
             .map(|i| Pulse {
@@ -3190,7 +3249,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn write_tzx_turns_long_silences_into_pauses_and_realigns_the_level() {
         let tape = Tape::from_pulses([
             Pulse {
@@ -3223,6 +3281,12 @@ mod tests {
         // After a pause the parser is low, so the high burst needs a flip.
         assert_eq!(&pulses[3..], &[(1, false), (900, true), (900, false)]);
     }
+    /// Merged (every check kept): `write_tzx_round_trips_alternating_pulses`, `write_tzx_turns_long_silences_into_pauses_and_realigns_the_level`.
+    #[test]
+    fn write_tzx_cases() {
+        write_tzx_round_trips_alternating_pulses();
+        write_tzx_turns_long_silences_into_pauses_and_realigns_the_level();
+    }
 
     #[test]
     fn from_pulses_drops_zero_length_pulses() {
@@ -3239,7 +3303,6 @@ mod tests {
         assert_eq!(tape.event_count(), 1);
     }
 
-    #[test]
     fn write_voc_round_trip() {
         // Create a simple tape with one pulse
         let original_tape = Tape {
@@ -3271,7 +3334,6 @@ mod tests {
     /// playing time has to survive a write/parse round trip to within a
     /// sample or two, at every common rate (it used to come back ~3% short
     /// at 44.1 kHz and ~4% at 96 kHz).
-    #[test]
     fn write_voc_round_trip_preserves_total_time_at_common_rates() {
         let pulses = (0..2000).map(|i| Pulse {
             cycles: if i % 2 == 0 { 2440 } else { 1281 },
@@ -3290,6 +3352,12 @@ mod tests {
                 error * 100.0
             );
         }
+    }
+    /// Merged (every check kept): `write_voc_round_trip`, `write_voc_round_trip_preserves_total_time_at_common_rates`.
+    #[test]
+    fn write_voc_cases() {
+        write_voc_round_trip();
+        write_voc_round_trip_preserves_total_time_at_common_rates();
     }
 
     #[test]
@@ -3352,7 +3420,6 @@ mod tests {
             .collect()
     }
 
-    #[test]
     fn a_16_bit_mono_wav_becomes_pulses_in_the_spectrum_clock() {
         // 441 samples high, 441 low, 882 high at 44.1 kHz: 10 ms, 10 ms, 20 ms.
         let data = square_16(&[(441, true), (441, false), (882, true)]);
@@ -3365,7 +3432,6 @@ mod tests {
         assert_eq!(tape.blocks.len(), 0, "raw audio has no ROM-block structure");
     }
 
-    #[test]
     fn eight_bit_stereo_and_float_wavs_decode_to_the_same_pulses() {
         let want = vec![(3_546_900 / 100, true), (3_546_900 / 100, false)]; // 10 ms each at 44.1 kHz? no: see below
         // 100 samples at 10 kHz = 10 ms: high then low.
@@ -3400,7 +3466,6 @@ mod tests {
         assert_eq!(pulses_of(&t24), want);
     }
 
-    #[test]
     fn noise_around_zero_does_not_make_edges_but_a_sine_gives_one_cycle_per_period() {
         // A square wave of +-20000 with +-1500 of wobble stays one clean pulse each way (the trigger is 10% of the peak).
         let noisy: Vec<u8> = (0..400)
@@ -3424,6 +3489,13 @@ mod tests {
         let pulses = pulses_of(&tape);
         let highs = pulses.iter().filter(|p| p.1).count();
         assert_eq!(highs, 10, "{pulses:?}");
+    }
+    /// Merged (every check kept): `a_16_bit_mono_wav_becomes_pulses_in_the_spectrum_clock`, `eight_bit_stereo_and_float_wavs_decode_to_the_same_pulses`, `noise_around_zero_does_not_make_edges_but_a_sine_gives_one_cycle_per_period`.
+    #[test]
+    fn wav_decoding() {
+        a_16_bit_mono_wav_becomes_pulses_in_the_spectrum_clock();
+        eight_bit_stereo_and_float_wavs_decode_to_the_same_pulses();
+        noise_around_zero_does_not_make_edges_but_a_sine_gives_one_cycle_per_period();
     }
 
     #[test]

@@ -1444,26 +1444,22 @@ mod tests {
         assert!(len >= 1);
     }
 
-    #[test]
     fn assemble_then_disassemble_round_trips_ld_a_n() {
         let bytes = assemble_one("LD A,5").unwrap();
         assert_eq!(disassemble(&bytes), ("LD A,0x05".to_string(), bytes.len()));
     }
 
-    #[test]
     fn assemble_is_case_insensitive() {
         let upper = assemble_one("LD A,5").unwrap();
         let lower = assemble_one("ld a,5").unwrap();
         assert_eq!(upper, lower);
     }
 
-    #[test]
     fn assemble_then_disassemble_round_trips_a_jump() {
         let bytes = assemble_one("JP 0x8000").unwrap();
         assert_eq!(disassemble(&bytes), ("JP 0x8000".to_string(), 3));
     }
 
-    #[test]
     fn assemble_then_disassemble_round_trips_an_indexed_load() {
         let bytes = assemble_one("LD A,(IX+5)").unwrap();
         assert_eq!(
@@ -1471,16 +1467,28 @@ mod tests {
             ("LD A,(IX+0x05)".to_string(), bytes.len())
         );
     }
-
+    /// Merged (every check kept): `assemble_then_disassemble_round_trips_ld_a_n`, `assemble_is_case_insensitive`, `assemble_then_disassemble_round_trips_a_jump`, `assemble_then_disassemble_round_trips_an_indexed_load`.
     #[test]
+    fn assemble_round_trips() {
+        assemble_then_disassemble_round_trips_ld_a_n();
+        assemble_is_case_insensitive();
+        assemble_then_disassemble_round_trips_a_jump();
+        assemble_then_disassemble_round_trips_an_indexed_load();
+    }
+
     fn assemble_rejects_a_label_operand_with_a_clear_message() {
         let err = assemble_one("JP loop").unwrap_err();
         assert!(err.contains("label"), "error should mention labels: {err}");
     }
 
-    #[test]
     fn assemble_rejects_an_unknown_mnemonic() {
         let err = assemble_one("FROB A,B").unwrap_err();
         assert!(err.contains("FROB"));
+    }
+    /// Merged (every check kept): `assemble_rejects_a_label_operand_with_a_clear_message`, `assemble_rejects_an_unknown_mnemonic`.
+    #[test]
+    fn assemble_rejections() {
+        assemble_rejects_a_label_operand_with_a_clear_message();
+        assemble_rejects_an_unknown_mnemonic();
     }
 }

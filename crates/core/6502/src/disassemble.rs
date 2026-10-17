@@ -478,7 +478,6 @@ mod tests {
         assert_eq!(assemble_one("NOP #$00", 0).unwrap(), vec![0x80, 0x00]);
     }
 
-    #[test]
     fn assembler_syntax_variants() {
         let a = |s: &str| assemble_one(s, 0xC000);
         assert_eq!(a("lda #$10").unwrap(), vec![0xA9, 0x10]);
@@ -499,7 +498,6 @@ mod tests {
         assert_eq!(a("BNE $BF82").unwrap(), vec![0xD0, 0x80]);
     }
 
-    #[test]
     fn assembler_rejects_nonsense_clearly() {
         let a = |s: &str| assemble_one(s, 0xC000);
         assert!(a("").unwrap_err().contains("empty"));
@@ -511,10 +509,15 @@ mod tests {
         assert!(a("LDA ($10").unwrap_err().contains("indirect"));
         assert!(a("JMP $10,Y").is_err());
     }
+    /// Merged (every check kept): `assembler_syntax_variants`, `assembler_rejects_nonsense_clearly`.
+    #[test]
+    fn assembler_syntax() {
+        assembler_syntax_variants();
+        assembler_rejects_nonsense_clearly();
+    }
 
     /// The table's lengths are the executor's: run every non-control-flow opcode and compare how far
     /// the program counter moved.
-    #[test]
     fn decoded_lengths_match_what_the_core_consumes() {
         let control = |m: &str| matches!(m, "JMP" | "JSR" | "RTS" | "RTI" | "BRK" | "JAM");
         for op in 0..=255u8 {
@@ -535,7 +538,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn control_flow_lengths() {
         assert_eq!(instruction_length(0x4C), 3); // JMP abs
         assert_eq!(instruction_length(0x6C), 3); // JMP (ind)
@@ -546,5 +548,11 @@ mod tests {
         for op in [0x10u8, 0x30, 0x50, 0x70, 0x90, 0xB0, 0xD0, 0xF0] {
             assert_eq!(instruction_length(op), 2);
         }
+    }
+    /// Merged (every check kept): `decoded_lengths_match_what_the_core_consumes`, `control_flow_lengths`.
+    #[test]
+    fn decoded_lengths() {
+        decoded_lengths_match_what_the_core_consumes();
+        control_flow_lengths();
     }
 }

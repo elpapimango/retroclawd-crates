@@ -599,7 +599,6 @@ mod tests {
         assert_eq!(cpu.hl, 0x0000);
     }
 
-    #[test]
     fn rlca_rotates_left_through_bit7_into_carry_and_bit0() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x85); // 1000_0101
@@ -618,7 +617,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_Z, FLAG_Z); // preserved
     }
 
-    #[test]
     fn rrca_rotates_right_through_bit0_into_carry_and_bit7() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x01);
@@ -631,7 +629,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_C, FLAG_C);
     }
 
-    #[test]
     fn rla_rotates_through_carry_flag() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x80); // bit7 set -> goes to carry
@@ -645,7 +642,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_C, FLAG_C); // new carry = old bit7
     }
 
-    #[test]
     fn rra_rotates_through_carry_flag() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x01); // bit0 set -> goes to carry
@@ -657,6 +653,14 @@ mod tests {
 
         assert_eq!(cpu.a(), 0x80);
         assert_eq!(cpu.f() & FLAG_C, FLAG_C);
+    }
+    /// Merged (every check kept): `rlca_rotates_left_through_bit7_into_carry_and_bit0`, `rrca_rotates_right_through_bit0_into_carry_and_bit7`, `rla_rotates_through_carry_flag`, `rra_rotates_through_carry_flag`.
+    #[test]
+    fn accumulator_rotates() {
+        rlca_rotates_left_through_bit7_into_carry_and_bit0();
+        rrca_rotates_right_through_bit0_into_carry_and_bit7();
+        rla_rotates_through_carry_flag();
+        rra_rotates_through_carry_flag();
     }
 
     #[test]
@@ -741,7 +745,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_N, 0);
     }
 
-    #[test]
     fn di_clears_both_iff_flags() {
         let mut cpu = Cpu::new();
         cpu.iff1 = true;
@@ -755,7 +758,6 @@ mod tests {
         assert!(!cpu.iff2);
     }
 
-    #[test]
     fn ei_sets_both_iff_flags() {
         let mut cpu = Cpu::new();
         let mut bus = FlatBus::new();
@@ -765,6 +767,12 @@ mod tests {
 
         assert!(cpu.iff1);
         assert!(cpu.iff2);
+    }
+    /// Merged (every check kept): `di_clears_both_iff_flags`, `ei_sets_both_iff_flags`.
+    #[test]
+    fn di_and_ei() {
+        di_clears_both_iff_flags();
+        ei_sets_both_iff_flags();
     }
 
     #[test]
@@ -795,7 +803,6 @@ mod tests {
         assert_eq!(cpu.sp, 0x8765);
     }
 
-    #[test]
     fn add_a_n_adds_immediate() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x10);
@@ -810,7 +817,6 @@ mod tests {
         assert_eq!(cpu.pc, 2);
     }
 
-    #[test]
     fn adc_a_n_includes_carry_in() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x10);
@@ -824,7 +830,6 @@ mod tests {
         assert_eq!(cpu.a(), 0x16);
     }
 
-    #[test]
     fn sub_n_subtracts_immediate() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x10);
@@ -839,7 +844,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_N, FLAG_N);
     }
 
-    #[test]
     fn sbc_a_n_includes_carry_in() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x10);
@@ -853,7 +857,6 @@ mod tests {
         assert_eq!(cpu.a(), 0x0E);
     }
 
-    #[test]
     fn and_n_masks_immediate() {
         let mut cpu = Cpu::new();
         cpu.set_a(0xFF);
@@ -867,7 +870,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_H, FLAG_H);
     }
 
-    #[test]
     fn xor_n_xors_immediate() {
         let mut cpu = Cpu::new();
         cpu.set_a(0xFF);
@@ -881,7 +883,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_Z, FLAG_Z);
     }
 
-    #[test]
     fn or_n_ors_immediate() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x0F);
@@ -894,7 +895,6 @@ mod tests {
         assert_eq!(cpu.a(), 0xFF);
     }
 
-    #[test]
     fn cp_n_compares_without_storing_result() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x10);
@@ -907,6 +907,18 @@ mod tests {
         assert_eq!(cycles, 7);
         assert_eq!(cpu.a(), 0x10); // unchanged
         assert_eq!(cpu.f() & FLAG_Z, FLAG_Z);
+    }
+    /// Merged (every check kept): `add_a_n_adds_immediate`, `adc_a_n_includes_carry_in`, `sub_n_subtracts_immediate`, `sbc_a_n_includes_carry_in`, `and_n_masks_immediate`, `xor_n_xors_immediate`, `or_n_ors_immediate`, `cp_n_compares_without_storing_result`.
+    #[test]
+    fn alu_immediate_operations() {
+        add_a_n_adds_immediate();
+        adc_a_n_includes_carry_in();
+        sub_n_subtracts_immediate();
+        sbc_a_n_includes_carry_in();
+        and_n_masks_immediate();
+        xor_n_xors_immediate();
+        or_n_ors_immediate();
+        cp_n_compares_without_storing_result();
     }
 
     #[test]

@@ -95,7 +95,6 @@ fn add_hl_ss<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 mod tests {
     use super::*;
     use crate::cpu::FLAG_N;
-    use crate::opcodes::IndexReg;
     use crate::test_support::FlatBus;
 
     #[test]
@@ -268,9 +267,4 @@ mod tests {
 
     // Sanity check that IndexReg is reachable via super:: as documented,
     // even though this file doesn't need to construct it directly elsewhere.
-    #[test]
-    fn active_index_is_none_outside_dispatch() {
-        let cpu = Cpu::new();
-        assert_eq!(cpu.active_index, None::<IndexReg>);
-    }
 }

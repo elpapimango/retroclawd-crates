@@ -118,7 +118,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_PV, 0);
     }
 
-    #[test]
     fn inc_a_preserves_carry_flag() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x01);
@@ -132,7 +131,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_C, FLAG_C); // untouched by INC
     }
 
-    #[test]
     fn inc_a_sets_half_carry_on_nibble_wrap() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x0F);
@@ -146,7 +144,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_PV, 0); // PV not set
     }
 
-    #[test]
     fn inc_a_sets_overflow_on_signed_wrap_from_0x7f() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x7F);
@@ -161,7 +158,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_N, 0); // N=0 for INC
     }
 
-    #[test]
     fn inc_a_zero_result_sets_zero_flag_and_wraps_from_0xff() {
         let mut cpu = Cpu::new();
         cpu.set_a(0xFF);
@@ -174,6 +170,14 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_Z, FLAG_Z);
         assert_eq!(cpu.f() & FLAG_H, FLAG_H); // 0xF nibble wrap
         assert_eq!(cpu.f() & FLAG_PV, 0); // no overflow
+    }
+    /// Merged (every check kept): `inc_a_preserves_carry_flag`, `inc_a_sets_half_carry_on_nibble_wrap`, `inc_a_sets_overflow_on_signed_wrap_from_0x7f`, `inc_a_zero_result_sets_zero_flag_and_wraps_from_0xff`.
+    #[test]
+    fn inc_a_flags() {
+        inc_a_preserves_carry_flag();
+        inc_a_sets_half_carry_on_nibble_wrap();
+        inc_a_sets_overflow_on_signed_wrap_from_0x7f();
+        inc_a_zero_result_sets_zero_flag_and_wraps_from_0xff();
     }
 
     #[test]
@@ -190,7 +194,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_N, FLAG_N); // N set for DEC
     }
 
-    #[test]
     fn dec_a_preserves_carry_flag() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x02);
@@ -204,7 +207,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_C, FLAG_C); // untouched by DEC
     }
 
-    #[test]
     fn dec_a_sets_half_borrow_on_nibble_wrap() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x10);
@@ -218,7 +220,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_PV, 0); // PV not set
     }
 
-    #[test]
     fn dec_a_sets_overflow_on_signed_wrap_from_0x80() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x80);
@@ -232,7 +233,6 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_S, 0); // S clear
     }
 
-    #[test]
     fn dec_a_zero_input_wraps_to_0xff_and_sets_sign() {
         let mut cpu = Cpu::new();
         cpu.set_a(0x00);
@@ -245,6 +245,14 @@ mod tests {
         assert_eq!(cpu.f() & FLAG_S, FLAG_S);
         assert_eq!(cpu.f() & FLAG_Z, 0);
         assert_eq!(cpu.f() & FLAG_H, FLAG_H); // borrow from bit 4
+    }
+    /// Merged (every check kept): `dec_a_preserves_carry_flag`, `dec_a_sets_half_borrow_on_nibble_wrap`, `dec_a_sets_overflow_on_signed_wrap_from_0x80`, `dec_a_zero_input_wraps_to_0xff_and_sets_sign`.
+    #[test]
+    fn dec_a_flags() {
+        dec_a_preserves_carry_flag();
+        dec_a_sets_half_borrow_on_nibble_wrap();
+        dec_a_sets_overflow_on_signed_wrap_from_0x80();
+        dec_a_zero_input_wraps_to_0xff_and_sets_sign();
     }
 
     #[test]

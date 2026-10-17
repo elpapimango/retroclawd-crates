@@ -54,7 +54,6 @@ pub fn with_border(
 mod tests {
     use super::*;
 
-    #[test]
     fn zero_border_returns_the_inner_buffer_unchanged() {
         let inner = vec![1, 2, 3, 4, 5, 6]; // 2x1 RGB
         let (w, h, rgb) = with_border(2, 1, &inner, 0, 0, [9, 9, 9]);
@@ -63,7 +62,6 @@ mod tests {
         assert_eq!(rgb, inner);
     }
 
-    #[test]
     fn pads_inner_buffer_with_border_color_on_all_sides() {
         // 1x1 white inner pixel, 1px black border on every side -> 3x3.
         let inner = vec![255, 255, 255];
@@ -86,12 +84,18 @@ mod tests {
         }
     }
 
-    #[test]
     fn asymmetric_border_width_and_height_are_independent() {
         let inner = vec![7, 7, 7]; // 1x1
         let (w, h, _) = with_border(1, 1, &inner, 4, 2, [0, 0, 0]);
 
         assert_eq!(w, 1 + 4 * 2);
         assert_eq!(h, 1 + 2 * 2);
+    }
+    /// Merged (every check kept): `zero_border_returns_the_inner_buffer_unchanged`, `pads_inner_buffer_with_border_color_on_all_sides`, `asymmetric_border_width_and_height_are_independent`.
+    #[test]
+    fn border_padding() {
+        zero_border_returns_the_inner_buffer_unchanged();
+        pads_inner_buffer_with_border_color_on_all_sides();
+        asymmetric_border_width_and_height_are_independent();
     }
 }
