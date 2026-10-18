@@ -271,7 +271,9 @@ fn cpl<B: Bus>(cpu: &mut Cpu, _bus: &mut B) -> u8 {
 fn scf<B: Bus>(cpu: &mut Cpu, _bus: &mut B) -> u8 {
     let mut f = cpu.f() & (FLAG_S | FLAG_Z | FLAG_PV);
     f |= FLAG_C;
-    f |= cpu.a() & (FLAG_F3 | FLAG_F5);
+    // F3/F5 = (Q ^ F) | A: A alone after a flag-writing instruction, A | F
+    // after one that left F alone (Patrik Rak's z80test, ccf variant).
+    f |= ((cpu.q ^ cpu.f()) | cpu.a()) & (FLAG_F3 | FLAG_F5);
     cpu.set_f(f);
     4
 }
@@ -285,7 +287,7 @@ fn ccf<B: Bus>(cpu: &mut Cpu, _bus: &mut B) -> u8 {
     } else {
         f |= FLAG_C;
     }
-    f |= cpu.a() & (FLAG_F3 | FLAG_F5);
+    f |= ((cpu.q ^ cpu.f()) | cpu.a()) & (FLAG_F3 | FLAG_F5);
     cpu.set_f(f);
     4
 }
@@ -711,6 +713,29 @@ mod tests {
             cpu.f() & (FLAG_S | FLAG_Z | FLAG_PV | FLAG_C),
             FLAG_S | FLAG_Z | FLAG_PV | FLAG_C
         );
+    }
+
+    #[test]
+    fn scf_f3_f5_follow_whether_the_previous_instruction_wrote_f() {
+        // After NOP (F untouched): F3/F5 = A | F.
+        let mut cpu = Cpu::new();
+        cpu.af = 0x0028; // A = 0, F = F3|F5, set directly: no flag write
+        let mut bus = FlatBus::new();
+        bus.write(0, 0x00); // NOP
+        bus.write(1, 0x37); // SCF
+        cpu.step(&mut bus);
+        cpu.step(&mut bus);
+        assert_eq!(cpu.f() & (FLAG_F3 | FLAG_F5), FLAG_F3 | FLAG_F5);
+
+        // After a flag-writing instruction (XOR A -> F3/F5 clear): A only.
+        let mut cpu = Cpu::new();
+        cpu.af = 0x0028;
+        let mut bus = FlatBus::new();
+        bus.write(0, 0xAF); // XOR A
+        bus.write(1, 0x37); // SCF
+        cpu.step(&mut bus);
+        cpu.step(&mut bus);
+        assert_eq!(cpu.f() & (FLAG_F3 | FLAG_F5), 0);
     }
 
     #[test]

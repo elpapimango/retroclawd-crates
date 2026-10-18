@@ -74,6 +74,16 @@ pub struct Cpu {
     /// already-waiting interrupt is taken). Taken (cleared) at the top of
     /// every `step()`; only a maskable interrupt is held off, never an NMI.
     pub(crate) ei_delay: bool,
+
+    /// The hidden "Q" latch: the flags byte if the previous instruction wrote
+    /// F, else 0. Only SCF/CCF read it (their F3/F5 are `(Q ^ F) | A`). Not
+    /// part of a saved state; a freshly loaded CPU starts with 0.
+    #[serde(skip)]
+    pub(crate) q: u8,
+    /// What the instruction now executing has written to F (0 if nothing);
+    /// becomes `q` when the next one starts.
+    #[serde(skip)]
+    pub(crate) q_next: u8,
 }
 
 impl Cpu {
@@ -283,6 +293,7 @@ impl Cpu {
         // memory accesses, contendable like any other -- have a fresh
         // accumulator to add their contention delay into.
         self.pending_cycles = 0;
+        self.q = std::mem::take(&mut self.q_next);
 
         let after_ei = std::mem::take(&mut self.ei_delay);
 
@@ -504,6 +515,7 @@ impl Cpu {
     }
 
     pub fn set_f(&mut self, val: u8) {
+        self.q_next = val;
         self.af = (self.af & 0xFF00) | val as u16;
     }
 

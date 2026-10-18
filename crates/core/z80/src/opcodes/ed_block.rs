@@ -124,9 +124,7 @@ fn cpdr<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 /// flags" formula (Sean Young's "The Undocumented Z80 Documented"): letting
 /// `k = value + ((C +/- 1) & 0xFF)` (the same direction as `delta`),
 /// H=C=(k>255), PV=parity((k&7)^B'), N=bit7 of value, S/Z/F3/F5 from the new
-/// B. This core doesn't independently verify that formula against real
-/// hardware/ZEXALL; flag it for extra scrutiny if exact undocumented-flag
-/// accuracy on I/O block ops turns out to matter.
+/// B. Checked against a real Z80 by Patrik Rak's z80test (flags variant).
 fn in_block<B: Bus>(cpu: &mut Cpu, bus: &mut B, delta: i16) -> bool {
     // INI/IND's second M1 is five T-states long; the extra one precedes the
     // port read.
@@ -145,9 +143,10 @@ fn in_block<B: Bus>(cpu: &mut Cpu, bus: &mut B, delta: i16) -> bool {
     let s = new_b & 0x80 != 0;
     let z = new_b == 0;
 
-    // N is documented (officially, not just as an undocumented refinement)
-    // to always be set for INI/IND/OUTI/OUTD.
-    let flags = flags_byte(s, z, hc, pv, true, hc);
+    // N is bit 7 of the transferred byte on a real Z80 (the manual's "always
+    // set" is only what the documented flags promise); Patrik Rak's z80test
+    // checks it against a real Zilog Z80.
+    let flags = flags_byte(s, z, hc, pv, value & 0x80 != 0, hc);
     apply_alu_flags(cpu, flags, new_b);
 
     new_b != 0
@@ -209,9 +208,8 @@ fn out_block<B: Bus>(cpu: &mut Cpu, bus: &mut B, delta: i16) {
     let s = new_b & 0x80 != 0;
     let z = new_b == 0;
 
-    // N is documented (officially, not just as an undocumented refinement)
-    // to always be set for INI/IND/OUTI/OUTD.
-    let flags = flags_byte(s, z, hc, pv, true, hc);
+    // N is bit 7 of the transferred byte (see `in_block`).
+    let flags = flags_byte(s, z, hc, pv, value & 0x80 != 0, hc);
     apply_alu_flags(cpu, flags, new_b);
 }
 
@@ -460,7 +458,7 @@ mod tests {
         assert_eq!(cpu.hl, 0x3001);
         assert_eq!(cpu.b(), 0x01);
         assert_eq!(cpu.f() & FLAG_Z, 0); // b != 0
-        assert_eq!(cpu.f() & FLAG_N, FLAG_N);
+        assert_eq!(cpu.f() & FLAG_N, 0); // N = bit 7 of the byte read (0)
     }
 
     #[test]
@@ -500,7 +498,7 @@ mod tests {
         assert_eq!(cpu.hl, 0x4001);
         assert_eq!(cpu.b(), 0x04); // decremented
         assert_eq!(cpu.f() & FLAG_Z, 0);
-        assert_eq!(cpu.f() & FLAG_N, FLAG_N);
+        assert_eq!(cpu.f() & FLAG_N, 0); // N = bit 7 of the byte written (0x77)
     }
 
     #[test]
