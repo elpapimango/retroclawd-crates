@@ -28,6 +28,10 @@ pub mod cpm;
 
 const DISC_SIGNATURE: &[u8] = b"MV - CPCEMU Disk-File\r\nDisk-Info\r\n";
 const EXTENDED_DISC_SIGNATURE: &[u8] = b"EXTENDED CPC DSK File\r\nDisk-Info\r\n";
+/// Real files vary after these first eight bytes ("MV - CPCEMU / 13 May 17 11:16" in Kevin Thacker's acid test disks, "MV - CPC" is
+/// all the format reference asks readers to check), so reading accepts any header that starts with them; writing uses the full ones.
+const DISC_MAGIC: &[u8] = b"MV - CPC";
+const EXTENDED_MAGIC: &[u8] = b"EXTENDED";
 const TRACK_SIGNATURE: &[u8] = b"Track-Info\r\n";
 const BLOCK_SIZE: usize = 0x100;
 
@@ -511,9 +515,7 @@ pub fn parse(bytes: &[u8]) -> Result<Disk, Error> {
     // (Extended DSK, `0` meaning "unformatted, not present in the file at
     // all" -- see the module doc comment).
     let extended;
-    let track_sizes: Vec<usize> = if bytes.len() >= DISC_SIGNATURE.len()
-        && &bytes[..DISC_SIGNATURE.len()] == DISC_SIGNATURE
-    {
+    let track_sizes: Vec<usize> = if bytes.starts_with(DISC_MAGIC) {
         extended = false;
         // Includes the Track Information block itself, per the format
         // reference -- the next track starts exactly `track_size` bytes
@@ -521,9 +523,7 @@ pub fn parse(bytes: &[u8]) -> Result<Disk, Error> {
         // length.
         let track_size = u16::from_le_bytes([bytes[0x32], bytes[0x33]]) as usize;
         vec![track_size; total_tracks]
-    } else if bytes.len() >= EXTENDED_DISC_SIGNATURE.len()
-        && &bytes[..EXTENDED_DISC_SIGNATURE.len()] == EXTENDED_DISC_SIGNATURE
-    {
+    } else if bytes.starts_with(EXTENDED_MAGIC) {
         extended = true;
         (0..total_tracks)
             .map(|i| bytes.get(0x34 + i).copied().unwrap_or(0) as usize * 256)
@@ -608,6 +608,16 @@ mod tests {
         let disk = parse(&build_minimal_dsk()).unwrap();
         let first = disk.first_sector(0, 0).unwrap();
         assert_eq!(first.sector, 1);
+    }
+
+    #[test]
+    fn any_header_starting_with_the_magic_is_accepted() {
+        // Kevin Thacker's CPC acid test disks say "MV - CPCEMU / 13 May 17 11:16" instead of the long form.
+        let mut bytes = build_minimal_dsk();
+        let text = b"MV - CPCEMU / 13 May 17 11:16   ";
+        bytes[..text.len()].copy_from_slice(text);
+        let disk = parse(&bytes).unwrap();
+        assert_eq!(disk.read_sector(0, 0, 1).unwrap().data[0], 0x11);
     }
 
     #[test]
