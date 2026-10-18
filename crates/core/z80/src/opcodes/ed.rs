@@ -36,6 +36,7 @@ fn pop16<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u16 {
 
 fn adc16(cpu: &mut Cpu, operand: u16) {
     let hl = cpu.hl;
+    cpu.memptr = hl.wrapping_add(1);
     let carry_in = u16::from(cpu.f() & FLAG_C != 0);
     let sum = hl as u32 + operand as u32 + carry_in as u32;
     let result = sum as u16;
@@ -56,6 +57,7 @@ fn adc16(cpu: &mut Cpu, operand: u16) {
 
 fn sbc16(cpu: &mut Cpu, operand: u16) {
     let hl = cpu.hl;
+    cpu.memptr = hl.wrapping_add(1);
     let carry_in = i32::from(cpu.f() & FLAG_C != 0);
     let diff = hl as i32 - operand as i32 - carry_in;
     let result = diff as u16;
@@ -99,6 +101,7 @@ fn ld_nn_ss<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     cpu.pc = cpu.pc.wrapping_add(1);
     let addr = u16::from_le_bytes([lo, hi]);
 
+    cpu.memptr = addr.wrapping_add(1);
     let val = get_pp(cpu, pp);
     cpu.mem_write(bus, addr, val as u8);
     cpu.mem_write(bus, addr.wrapping_add(1), (val >> 8) as u8);
@@ -114,6 +117,7 @@ fn ld_ss_nn<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     cpu.pc = cpu.pc.wrapping_add(1);
     let addr = u16::from_le_bytes([lo, hi]);
 
+    cpu.memptr = addr.wrapping_add(1);
     let val_lo = cpu.mem_read(bus, addr);
     let val_hi = cpu.mem_read(bus, addr.wrapping_add(1));
     set_pp(cpu, pp, u16::from_le_bytes([val_lo, val_hi]));
@@ -144,12 +148,14 @@ pub(crate) fn undefined_ed<B: Bus>(_cpu: &mut Cpu, _bus: &mut B) -> u8 {
 
 fn retn<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     cpu.pc = pop16(cpu, bus);
+    cpu.memptr = cpu.pc;
     cpu.iff1 = cpu.iff2;
     14
 }
 
 fn reti<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     cpu.pc = pop16(cpu, bus);
+    cpu.memptr = cpu.pc;
     14
 }
 
@@ -198,6 +204,7 @@ fn ld_a_r<B: Bus>(cpu: &mut Cpu, _bus: &mut B) -> u8 {
 
 fn rrd<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let addr = cpu.hl;
+    cpu.memptr = addr.wrapping_add(1);
     let mem = cpu.mem_read(bus, addr);
     let a = cpu.a();
 
@@ -222,6 +229,7 @@ fn rrd<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 
 fn rld<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let addr = cpu.hl;
+    cpu.memptr = addr.wrapping_add(1);
     let mem = cpu.mem_read(bus, addr);
     let a = cpu.a();
 
@@ -248,6 +256,7 @@ fn rld<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 /// flags exactly like IN r,(C), but discards the value instead of storing it
 /// to any register.
 fn in_c<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
+    cpu.memptr = cpu.bc.wrapping_add(1);
     let val = cpu.io_read(bus, cpu.bc);
     let carry = cpu.f() & FLAG_C != 0;
     let flags = super::flags_byte(
@@ -266,6 +275,7 @@ fn in_c<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 /// (the NMOS Z80 behavior; some CMOS variants write 0xFF instead). No flags
 /// affected.
 fn out_c_0<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
+    cpu.memptr = cpu.bc.wrapping_add(1);
     cpu.io_write(bus, cpu.bc, 0);
     12
 }
@@ -278,6 +288,7 @@ fn out_c_0<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 fn in_r_c<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let opcode = bus.read(cpu.pc.wrapping_sub(1));
     let r = (opcode >> 3) & 0x07;
+    cpu.memptr = cpu.bc.wrapping_add(1);
     let val = cpu.io_read(bus, cpu.bc);
     match r {
         0 => cpu.set_b(val),
@@ -317,6 +328,7 @@ fn out_c_r<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
         7 => cpu.a(),
         _ => unreachable!("OUT (C),r with unsupported r field: {r}"),
     };
+    cpu.memptr = cpu.bc.wrapping_add(1);
     cpu.io_write(bus, cpu.bc, val);
     12
 }

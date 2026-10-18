@@ -44,6 +44,7 @@ fn ldd<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 fn ldir<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     if ld_block(cpu, bus, 1) {
         cpu.pc = cpu.pc.wrapping_sub(2);
+        cpu.memptr = cpu.pc.wrapping_add(1); // repeating: PC + 1, PC = the instruction's address
         21
     } else {
         16
@@ -53,6 +54,7 @@ fn ldir<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 fn lddr<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     if ld_block(cpu, bus, -1) {
         cpu.pc = cpu.pc.wrapping_sub(2);
+        cpu.memptr = cpu.pc.wrapping_add(1);
         21
     } else {
         16
@@ -71,6 +73,7 @@ fn lddr<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 fn cp_block<B: Bus>(cpu: &mut Cpu, bus: &mut B, delta: i16) -> bool {
     let value = cpu.mem_read(bus, cpu.hl);
     let (result, s, z, h, _pv, _c) = sub_core(cpu.a(), value, 0);
+    cpu.memptr = cpu.memptr.wrapping_add(delta as u16); // CPI +1, CPD -1 (also the last step of CPIR/CPDR)
 
     cpu.hl = cpu.hl.wrapping_add(delta as u16);
     cpu.bc = cpu.bc.wrapping_sub(1);
@@ -99,6 +102,7 @@ fn cpd<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 fn cpir<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     if cp_block(cpu, bus, 1) {
         cpu.pc = cpu.pc.wrapping_sub(2);
+        cpu.memptr = cpu.pc.wrapping_add(1);
         21
     } else {
         16
@@ -108,6 +112,7 @@ fn cpir<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 fn cpdr<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     if cp_block(cpu, bus, -1) {
         cpu.pc = cpu.pc.wrapping_sub(2);
+        cpu.memptr = cpu.pc.wrapping_add(1);
         21
     } else {
         16
@@ -129,6 +134,7 @@ fn in_block<B: Bus>(cpu: &mut Cpu, bus: &mut B, delta: i16) -> bool {
     // INI/IND's second M1 is five T-states long; the extra one precedes the
     // port read.
     cpu.internal_cycles(bus, 1);
+    cpu.memptr = cpu.bc.wrapping_add(delta as u16); // BC before B is decremented
     let value = cpu.io_read(bus, cpu.bc);
     cpu.mem_write(bus, cpu.hl, value);
     cpu.hl = cpu.hl.wrapping_add(delta as u16);
@@ -197,6 +203,7 @@ fn out_block<B: Bus>(cpu: &mut Cpu, bus: &mut B, delta: i16) {
     // memory read.
     cpu.internal_cycles(bus, 1);
 
+    cpu.memptr = cpu.bc.wrapping_add(delta as u16); // BC after B is decremented
     let value = cpu.mem_read(bus, cpu.hl);
     cpu.io_write(bus, cpu.bc, value);
     cpu.hl = cpu.hl.wrapping_add(delta as u16);

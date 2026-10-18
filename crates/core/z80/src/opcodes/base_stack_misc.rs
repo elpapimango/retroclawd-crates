@@ -112,6 +112,7 @@ fn ex_sp_hl<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     cpu.mem_write(bus, sp, reg_val as u8);
     cpu.mem_write(bus, sp.wrapping_add(1), (reg_val >> 8) as u8);
     cpu.set_hl_or_index(mem_val);
+    cpu.memptr = mem_val;
 
     19
 }
@@ -363,6 +364,7 @@ fn cp_n<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 fn out_n_a<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let n = fetch_byte(cpu, bus);
     let port = ((cpu.a() as u16) << 8) | n as u16;
+    cpu.memptr = super::base_loads::memptr_after_store_a(u16::from(n), cpu.a());
     cpu.io_write(bus, port, cpu.a());
     11
 }
@@ -370,6 +372,7 @@ fn out_n_a<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 fn in_a_n<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let n = fetch_byte(cpu, bus);
     let port = ((cpu.a() as u16) << 8) | n as u16;
+    cpu.memptr = port.wrapping_add(1);
     let val = cpu.io_read(bus, port);
     cpu.set_a(val);
     11

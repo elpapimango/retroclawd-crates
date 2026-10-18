@@ -60,6 +60,7 @@ fn dec_ss<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 fn add_hl_ss<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let ss = ss_field(cpu, bus);
     let hl = cpu.hl_or_index();
+    cpu.memptr = hl.wrapping_add(1);
     let operand = match ss {
         0 => cpu.bc,
         1 => cpu.de,

@@ -52,6 +52,7 @@ fn rot_shift_indexed_cb<B: Bus>(cpu: &mut Cpu, bus: &mut B, d: i8) -> u8 {
     let low3 = opcode & 0x07;
 
     let addr = cpu.hl_or_index().wrapping_add(d as i16 as u16);
+    cpu.memptr = addr;
     let value = cpu.mem_read(bus, addr);
 
     let (result, carry_out) = match sub_op {
@@ -97,6 +98,7 @@ fn bit_indexed_cb<B: Bus>(cpu: &mut Cpu, bus: &mut B, d: i8) -> u8 {
     let b = (opcode >> 3) & 0x07;
 
     let addr = cpu.hl_or_index().wrapping_add(d as i16 as u16);
+    cpu.memptr = addr;
     let value = cpu.mem_read(bus, addr);
 
     let bit_set = value & (1 << b) != 0;
@@ -123,6 +125,7 @@ fn res_indexed_cb<B: Bus>(cpu: &mut Cpu, bus: &mut B, d: i8) -> u8 {
     let low3 = opcode & 0x07;
 
     let addr = cpu.hl_or_index().wrapping_add(d as i16 as u16);
+    cpu.memptr = addr;
     let value = cpu.mem_read(bus, addr);
     let result = value & !(1 << b);
 
@@ -142,6 +145,7 @@ fn set_indexed_cb<B: Bus>(cpu: &mut Cpu, bus: &mut B, d: i8) -> u8 {
     let low3 = opcode & 0x07;
 
     let addr = cpu.hl_or_index().wrapping_add(d as i16 as u16);
+    cpu.memptr = addr;
     let value = cpu.mem_read(bus, addr);
     let result = value | (1 << b);
 

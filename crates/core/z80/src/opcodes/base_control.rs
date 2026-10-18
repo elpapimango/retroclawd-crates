@@ -63,6 +63,7 @@ fn pop16<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u16 {
 fn jr_e<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let d = fetch_displacement(cpu, bus);
     cpu.pc = cpu.pc.wrapping_add(d as i16 as u16);
+    cpu.memptr = cpu.pc;
     12
 }
 
@@ -74,6 +75,7 @@ fn jr_cc<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let d = fetch_displacement(cpu, bus);
     if condition_holds(cpu, cc) {
         cpu.pc = cpu.pc.wrapping_add(d as i16 as u16);
+        cpu.memptr = cpu.pc;
         12
     } else {
         7
@@ -90,6 +92,7 @@ fn djnz<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let d = fetch_displacement(cpu, bus);
     if cpu.b() != 0 {
         cpu.pc = cpu.pc.wrapping_add(d as i16 as u16);
+        cpu.memptr = cpu.pc;
         13
     } else {
         8
@@ -100,6 +103,7 @@ fn djnz<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 
 fn jp_nn<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     cpu.pc = fetch_addr16(cpu, bus);
+    cpu.memptr = cpu.pc;
     10
 }
 
@@ -109,6 +113,7 @@ fn jp_cc<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let opcode = bus.read(cpu.pc.wrapping_sub(1));
     let cc = (opcode >> 3) & 0x07;
     let addr = fetch_addr16(cpu, bus);
+    cpu.memptr = addr; // taken or not
     if condition_holds(cpu, cc) {
         cpu.pc = addr;
     }
@@ -126,6 +131,7 @@ fn jp_hl<B: Bus>(cpu: &mut Cpu, _bus: &mut B) -> u8 {
 
 fn call_nn<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let addr = fetch_addr16(cpu, bus);
+    cpu.memptr = addr;
     let ret = cpu.pc;
     push16(cpu, bus, ret);
     cpu.pc = addr;
@@ -138,6 +144,7 @@ fn call_cc<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let opcode = bus.read(cpu.pc.wrapping_sub(1));
     let cc = (opcode >> 3) & 0x07;
     let addr = fetch_addr16(cpu, bus);
+    cpu.memptr = addr; // taken or not
     if condition_holds(cpu, cc) {
         let ret = cpu.pc;
         push16(cpu, bus, ret);
@@ -152,6 +159,7 @@ fn call_cc<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 
 fn ret<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     cpu.pc = pop16(cpu, bus);
+    cpu.memptr = cpu.pc;
     10
 }
 
@@ -164,6 +172,7 @@ fn ret_cc<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
         // RET cc's M1 is five T-states long; the extra one precedes the pops.
         cpu.internal_cycles(bus, 1);
         cpu.pc = pop16(cpu, bus);
+        cpu.memptr = cpu.pc;
         11
     } else {
         5
@@ -188,6 +197,7 @@ fn rst<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let ret = cpu.pc;
     push16(cpu, bus, ret);
     cpu.pc = target;
+    cpu.memptr = target;
     11
 }
 

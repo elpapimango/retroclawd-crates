@@ -70,29 +70,39 @@ fn ld_sp_nn<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     10
 }
 
+/// MEMPTR after `LD (addr),A`, `LD (rp),A` and `OUT (n),A`: the low byte is addr + 1, the high byte A.
+pub(crate) fn memptr_after_store_a(addr: u16, a: u8) -> u16 {
+    (u16::from(a) << 8) | (addr.wrapping_add(1) & 0xFF)
+}
+
 fn ld_bc_ind_a<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
+    cpu.memptr = memptr_after_store_a(cpu.bc, cpu.a());
     cpu.mem_write(bus, cpu.bc, cpu.a());
     7
 }
 
 fn ld_de_ind_a<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
+    cpu.memptr = memptr_after_store_a(cpu.de, cpu.a());
     cpu.mem_write(bus, cpu.de, cpu.a());
     7
 }
 
 fn ld_nn_ind_a<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let addr = fetch_imm16(cpu, bus);
+    cpu.memptr = memptr_after_store_a(addr, cpu.a());
     cpu.mem_write(bus, addr, cpu.a());
     13
 }
 
 fn ld_a_bc_ind<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
+    cpu.memptr = cpu.bc.wrapping_add(1);
     let val = cpu.mem_read(bus, cpu.bc);
     cpu.set_a(val);
     7
 }
 
 fn ld_a_de_ind<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
+    cpu.memptr = cpu.de.wrapping_add(1);
     let val = cpu.mem_read(bus, cpu.de);
     cpu.set_a(val);
     7
@@ -100,6 +110,7 @@ fn ld_a_de_ind<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 
 fn ld_a_nn_ind<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let addr = fetch_imm16(cpu, bus);
+    cpu.memptr = addr.wrapping_add(1);
     let val = cpu.mem_read(bus, addr);
     cpu.set_a(val);
     13
@@ -107,6 +118,7 @@ fn ld_a_nn_ind<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 
 fn ld_nn_ind_hl<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let addr = fetch_imm16(cpu, bus);
+    cpu.memptr = addr.wrapping_add(1);
     let val = cpu.hl_or_index();
     cpu.mem_write(bus, addr, val as u8);
     cpu.mem_write(bus, addr.wrapping_add(1), (val >> 8) as u8);
@@ -115,6 +127,7 @@ fn ld_nn_ind_hl<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 
 fn ld_hl_nn_ind<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
     let addr = fetch_imm16(cpu, bus);
+    cpu.memptr = addr.wrapping_add(1);
     let lo = cpu.mem_read(bus, addr);
     let hi = cpu.mem_read(bus, addr.wrapping_add(1));
     cpu.set_hl_or_index((lo as u16) | ((hi as u16) << 8));

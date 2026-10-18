@@ -52,9 +52,10 @@ fn bit<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> u8 {
 
     // PV mirrors Z on BIT. F3/F5 normally come from the tested value, but
     // for the (HL) form real hardware sources them from the high byte of
-    // the internal WZ address latch (HL+1) instead.
+    // the internal MEMPTR (WZ) register, which earlier instructions leave
+    // their address in.
     let f3f5_source = if idx == 6 {
-        (cpu.hl.wrapping_add(1) >> 8) as u8
+        (cpu.memptr >> 8) as u8
     } else {
         val
     };

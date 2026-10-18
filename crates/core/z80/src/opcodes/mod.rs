@@ -100,7 +100,9 @@ pub(crate) fn indexed_addr<B: Bus>(cpu: &mut Cpu, bus: &mut B, base: u16) -> u16
     // for) needs to advance past it explicitly, unlike `mem_read`'s 3 T-state
     // base cost above, which already advanced it as part of that call.
     bus.advance_tstates(5);
-    base.wrapping_add(d as i16 as u16)
+    let addr = base.wrapping_add(d as i16 as u16);
+    cpu.memptr = addr; // any instruction with (INDEX+d)
+    addr
 }
 
 /// Reads one of the 8 standard Z80 register-field targets (3-bit encoding:

@@ -84,6 +84,13 @@ pub struct Cpu {
     /// becomes `q` when the next one starts.
     #[serde(skip)]
     pub(crate) q_next: u8,
+
+    /// The hidden MEMPTR (WZ) register: the 16-bit internal address buffer that BIT n,(HL) shows
+    /// bits 11 and 13 of in F3/F5 and that most address-handling instructions leave a value in
+    /// (Boo-boo's "MEMPTR, esoteric register of the Zilog Z80 CPU"). Not part of a saved state; a
+    /// freshly loaded CPU starts with 0.
+    #[serde(skip)]
+    pub(crate) memptr: u16,
 }
 
 impl Cpu {
@@ -428,6 +435,7 @@ impl Cpu {
                 let lo = self.mem_read(bus, ptr);
                 let hi = self.mem_read(bus, ptr.wrapping_add(1));
                 self.pc = ((hi as u16) << 8) | lo as u16;
+                self.memptr = self.pc;
                 19
             }
             _ => {
@@ -438,6 +446,7 @@ impl Cpu {
                 // real hardware -- this covers the only mode either machine
                 // needs.
                 self.pc = 0x0038;
+                self.memptr = self.pc;
                 13
             }
         }
@@ -464,6 +473,7 @@ impl Cpu {
         self.mem_write(bus, self.sp, self.pc as u8);
 
         self.pc = 0x0066;
+        self.memptr = self.pc;
         11
     }
 
@@ -512,6 +522,15 @@ impl Cpu {
     /// host needs this crate's own dispatch-table internals for).
     pub fn f(&self) -> u8 {
         self.af as u8
+    }
+
+    /// The hidden MEMPTR (WZ) register (see the field's doc comment).
+    pub fn memptr(&self) -> u16 {
+        self.memptr
+    }
+
+    pub fn set_memptr(&mut self, val: u16) {
+        self.memptr = val;
     }
 
     pub fn set_f(&mut self, val: u8) {
