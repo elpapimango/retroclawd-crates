@@ -23,7 +23,7 @@ names or types, so any difference decodes to garbage (or an absurd allocation).
 The plugin's own `version` string (its crate version) is informational only.
 
 `retroclawd --list-plugins` prints the host's numbers on its first line and each
-plugin's ABI (`(ABI 1.1)`); a rejected library is listed under the scan warnings
+plugin's ABI (`(ABI 1.2)`); a rejected library is listed under the scan warnings
 with the reason.
 
 ## 2. What is frozen
@@ -41,7 +41,7 @@ Never changes within an ABI major:
   must be at least as large as the host's definition (`compat::check_vtable_size`);
 * the message envelope starts with the protocol version as a variable-length
   `u16` (so the host checks the version before decoding the payload — a
-  skewed plugin gets "protocol version mismatch: expected 10, got 11", never a
+  skewed plugin gets "protocol version mismatch: expected 11, got 12", never a
   decode of the wrong schema);
 * buffer ownership: memory a plugin returns (`RcBuffer`) is freed by calling
   **that plugin's** `free_buffer`, never by the host's allocator; request slices
@@ -145,3 +145,7 @@ commit (`rev = "..."` in the manifests; a tag would do, but tags cannot be pushe
 commit changes which `ABI_MAJOR`/`ABI_MINOR`/`PROTOCOL_VERSION` its libraries export, and must be checked against
 this document and against the host release the libraries will be shipped with. Release an ABI-affecting change
 as a new commit/tag, then bump each family in turn.
+
+## History of bumps
+
+* **ABI minor 2 / protocol 11 / profile contract 2** (readiness for 16-bit machines and consoles; design in `docs/superpowers/specs/2026-10-18-abi-16bit-readiness-design.md` of the application repository, decision in its ADR 0003): addresses at the `Machine` and protocol boundary are `u64` (`machine::Addr`), read lengths `u32`; the vtable gained `pc_wide` (the original `pc` stays and returns the low 16 bits); `DebugCommand::OnCpu` and `MachineProfile::cpus` address several CPUs; `MachineCommand::AxisEvent` and `MachineProfile::axis_names` carry analogue input; `MachineResponse::AudioPcm` replaces `AudioPcmMono` (channels, rate); `MachineMetadata` reports the exact frame rate, pixel aspect and audio format. `machine::Bus` is unchanged: each Core defines the bus it needs.

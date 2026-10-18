@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 11;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtocolEnvelope<T> {
@@ -19,9 +19,24 @@ pub enum CpuFamily {
     Z80,
     Mos6502,
     Other(String),
+    M68k,
 }
 
-pub const MACHINE_PROFILE_CONTRACT_VERSION: u16 = 1;
+/// One programmable CPU of a Machine. A Machine lists its CPUs in
+/// `MachineProfile::cpus`; the first is the primary CPU, the one `pc`,
+/// `halted` and an unqualified debug command refer to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CpuInfo {
+    /// Stable id used to address this CPU in `DebugCommand::OnCpu`
+    /// (`"main"`, `"z80"`, `"68000"`).
+    pub id: String,
+    pub name: String,
+    pub family: CpuFamily,
+    /// Name of the `AddressSpaceInfo` this CPU executes from.
+    pub address_space: String,
+}
+
+pub const MACHINE_PROFILE_CONTRACT_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MachineCapability {
@@ -166,6 +181,14 @@ pub struct MachineProfile {
     /// then passes configured names through unchecked).
     #[serde(default)]
     pub key_names: Vec<MachineKeyInfo>,
+    /// The Machine's programmable CPUs, primary first (contract v2). Empty
+    /// means one CPU of `cpu_family`.
+    #[serde(default)]
+    pub cpus: Vec<CpuInfo>,
+    /// Names of the analogue axes `MachineCommand::AxisEvent` understands
+    /// (`Joy1X`, `Joy1Y`, `LeftTrigger`); empty when the Machine has none.
+    #[serde(default)]
+    pub axis_names: Vec<String>,
 }
 
 /// One key name a machine understands, plus friendly spellings the host
@@ -297,7 +320,7 @@ pub struct MachineInstanceCallResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepResult {
     pub cycles: u32,
-    pub pc: u16,
+    pub pc: u64,
     pub halted: bool,
 }
 
@@ -325,7 +348,7 @@ pub struct AddressSpaceInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisassemblyLine {
-    pub address: u16,
+    pub address: u64,
     pub bytes: Vec<u8>,
     pub text: String,
 }
@@ -393,13 +416,13 @@ pub struct BitmapPaletteColor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BitmapExplorerDefaults {
-    pub address: u16,
+    pub address: u64,
     pub bytes_width: u16,
     pub bitplanes: u8,
     pub zoom: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MachineMetadata {
     pub machine_id: String,
     pub model: Option<String>,
@@ -409,6 +432,19 @@ pub struct MachineMetadata {
     pub bitmap_palette: Vec<BitmapPaletteColor>,
     #[serde(default)]
     pub bitmap_defaults: Option<BitmapExplorerDefaults>,
+    /// Exact frame rate as `num / den` Hz (protocol v11). `0 / 0` (an older
+    /// or unset value) means "use `FrameHz`".
+    #[serde(default)]
+    pub frame_rate: (u32, u32),
+    /// Width:height of one output pixel; `(0, 0)` means square.
+    #[serde(default)]
+    pub pixel_aspect: (u16, u16),
+    /// Interleaved channels of `AudioPcm` (0 = unset, mono).
+    #[serde(default)]
+    pub audio_channels: u8,
+    /// Sample rate of `AudioPcm` (0 = unset, `machine::AUDIO_SAMPLE_RATE`).
+    #[serde(default)]
+    pub audio_sample_rate: u32,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DebugValue {
@@ -426,10 +462,10 @@ pub enum DebugCommand {
     StepInstruction,
     StepOver,
     SetBreakpoint {
-        address: u16,
+        address: u64,
     },
     ClearBreakpoint {
-        address: u16,
+        address: u64,
     },
     ClearAllBreakpoints,
     ListBreakpoints,
@@ -440,28 +476,36 @@ pub enum DebugCommand {
     },
     GetAddressSpaces,
     ReadMemory {
-        address: u16,
-        len: u16,
+        address: u64,
+        len: u32,
         space: Option<String>,
     },
     WriteMemory {
-        address: u16,
+        address: u64,
         bytes: Vec<u8>,
         space: Option<String>,
     },
     GetDisassembly {
-        start: Option<u16>,
-        lines: u16,
+        start: Option<u64>,
+        lines: u32,
     },
     GetMediaSnapshot,
     GetChipSnapshots,
     GetMachineMetadata,
+    /// Runs `command` against the CPU `cpu` (a `CpuInfo::id`) instead of the
+    /// primary one. Applies to the CPU-specific commands (registers,
+    /// breakpoints, stepping, disassembly); a Machine with one CPU answers
+    /// an error for any id but its own.
+    OnCpu {
+        cpu: String,
+        command: Box<DebugCommand>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DebugResponse {
     Ack,
-    Breakpoints(Vec<u16>),
+    Breakpoints(Vec<u64>),
     Registers(RegisterSnapshot),
     AddressSpaces(Vec<AddressSpaceInfo>),
     Memory(Vec<u8>),
@@ -500,21 +544,21 @@ pub enum MachineCommand {
     GetPc,
     Reset,
     ReadMemory {
-        address: u16,
-        len: u16,
+        address: u64,
+        len: u32,
         space: Option<String>,
     },
     WriteMemory {
-        address: u16,
+        address: u64,
         bytes: Vec<u8>,
         space: Option<String>,
     },
     LoadBytes {
-        address: u16,
+        address: u64,
         bytes: Vec<u8>,
     },
     SetPc {
-        address: u16,
+        address: u64,
     },
     SaveState,
     SaveSnapshot {
@@ -585,6 +629,12 @@ pub enum MachineCommand {
     MouseWheel {
         delta: i8,
     },
+    /// An analogue input moved: `axis` is one of `MachineProfile::axis_names`,
+    /// `value` is -32768..=32767 (centre 0; triggers use 0..=32767).
+    AxisEvent {
+        axis: String,
+        value: i16,
+    },
     RenderFrame,
     DrainAudio,
     Debug(DebugCommand),
@@ -612,7 +662,7 @@ pub enum MachineResponse {
     FrameHz(u64),
     Step(StepResult),
     Halted(bool),
-    Pc(u16),
+    Pc(u64),
     Memory(Vec<u8>),
     BytesWritten(u32),
     StateBlob(Vec<u8>),
@@ -636,7 +686,9 @@ pub enum MachineResponse {
         height: u32,
         rgb: Vec<u8>,
     },
-    AudioPcmMono {
+    /// Interleaved samples (`channels` = 1 mono, 2 stereo).
+    AudioPcm {
+        channels: u8,
         sample_rate: u32,
         samples: Vec<f32>,
     },
@@ -693,6 +745,10 @@ mod tests {
                 bitplanes: 1,
                 zoom: 3,
             }),
+            frame_rate: (50, 1),
+            pixel_aspect: (1, 1),
+            audio_channels: 1,
+            audio_sample_rate: 44_100,
         };
         let bytes = crate::encode_message(&metadata).expect("encode metadata");
         let decoded: MachineMetadata = crate::decode_message(&bytes).expect("decode metadata");

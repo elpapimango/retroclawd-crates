@@ -104,19 +104,19 @@ mod tests {
         fn halted(&self) -> bool {
             self.steps_remaining == 0
         }
-        fn pc(&self) -> u16 {
+        fn pc(&self) -> crate::Addr {
             0
         }
         fn registers(&self) -> Vec<(&'static str, u64)> {
             Vec::new()
         }
-        fn read_memory(&self, _addr: u16) -> u8 {
+        fn read_memory(&self, _addr: crate::Addr) -> u8 {
             0
         }
-        fn load(&mut self, _addr: u16, bytes: &[u8]) -> usize {
+        fn load(&mut self, _addr: crate::Addr, bytes: &[u8]) -> usize {
             bytes.len()
         }
-        fn set_pc(&mut self, _addr: u16) {}
+        fn set_pc(&mut self, _addr: crate::Addr) {}
         fn reset(&mut self) {}
         fn save_state(&self) -> Vec<u8> {
             Vec::new()
@@ -233,19 +233,19 @@ mod tests {
         fn halted(&self) -> bool {
             self.steps_remaining == 0
         }
-        fn pc(&self) -> u16 {
+        fn pc(&self) -> crate::Addr {
             0
         }
         fn registers(&self) -> Vec<(&'static str, u64)> {
             Vec::new()
         }
-        fn read_memory(&self, _addr: u16) -> u8 {
+        fn read_memory(&self, _addr: crate::Addr) -> u8 {
             0
         }
-        fn load(&mut self, _addr: u16, bytes: &[u8]) -> usize {
+        fn load(&mut self, _addr: crate::Addr, bytes: &[u8]) -> usize {
             bytes.len()
         }
-        fn set_pc(&mut self, _addr: u16) {}
+        fn set_pc(&mut self, _addr: crate::Addr) {}
         fn reset(&mut self) {}
         fn save_state(&self) -> Vec<u8> {
             Vec::new()

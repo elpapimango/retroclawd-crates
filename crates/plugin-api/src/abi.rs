@@ -14,7 +14,12 @@ pub const ABI_MAJOR_V1: u16 = 1;
 /// struct safe in the other direction, since it's only inspected after the
 /// struct has already been read out of `descriptor.vtable` at its (now
 /// larger) `Self` size.
-pub const ABI_MINOR_V1: u16 = 1;
+///
+/// Bumped 1 -> 2 to append `pc_wide` (the program counter as a `u64`): the
+/// original `pc` returns a `u16`, which cannot hold a 68000's 24-bit
+/// address. `pc` stays in place (retyping it would be a new major); it now
+/// returns the low 16 bits and a host that sees minor 2 calls `pc_wide`.
+pub const ABI_MINOR_V1: u16 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -266,6 +271,9 @@ pub type MachineHaltedFnV1 = unsafe extern "C" fn(instance: MachineInstanceHandl
 /// method's doc comment in `crates/machine/src/lib.rs`. Reads `0` for an
 /// unrecognized instance handle.
 pub type MachinePcFnV1 = unsafe extern "C" fn(instance: MachineInstanceHandle) -> u16;
+/// Fast-path program counter, full width (ABI minor 2). Same contract as
+/// `MachinePcFnV1`; reads `0` for an unrecognized instance handle.
+pub type MachinePcWideFnV1 = unsafe extern "C" fn(instance: MachineInstanceHandle) -> u64;
 
 /// `size` + the 5 original fields are ABI-minor-`0`'s complete shape;
 /// `step`/`halted`/`pc` were appended in ABI minor `1` (see `ABI_MINOR_V1`'s
@@ -296,6 +304,9 @@ pub struct MachinePluginVTableV1 {
     pub step: MachineStepFnV1,
     pub halted: MachineHaltedFnV1,
     pub pc: MachinePcFnV1,
+    /// ABI minor 2: the program counter at full width. A plugin whose Machine
+    /// has a 16-bit address space may return the same value as `pc`.
+    pub pc_wide: MachinePcWideFnV1,
 }
 
 impl MachinePluginVTableV1 {
@@ -356,9 +367,10 @@ mod tests {
         assert_eq!(offset_of!(MachinePluginVTableV1, step), 48);
         assert_eq!(offset_of!(MachinePluginVTableV1, halted), 56);
         assert_eq!(offset_of!(MachinePluginVTableV1, pc), 64);
-        assert_eq!(size_of::<MachinePluginVTableV1>(), 72);
-        // ABI minor 0 ended after `free_buffer`.
-        assert_eq!(ABI_MINOR_V1, 1);
+        assert_eq!(offset_of!(MachinePluginVTableV1, pc_wide), 72);
+        assert_eq!(size_of::<MachinePluginVTableV1>(), 80);
+        // ABI minor 0 ended after `free_buffer`, minor 1 after `pc`.
+        assert_eq!(ABI_MINOR_V1, 2);
     }
 
     #[test]

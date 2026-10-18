@@ -143,7 +143,7 @@ mod tests {
         assert!(check(host.1 + 5).is_ok());
         assert_eq!(
             check(host.1 - 1).unwrap_err(),
-            "machine plugin ABI minor too old: host requires >= 1, plugin=0"
+            "machine plugin ABI minor too old: host requires >= 2, plugin=1"
         );
     }
 

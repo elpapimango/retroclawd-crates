@@ -24,6 +24,57 @@ pub use video::with_border;
 /// frequency either the AY-3-8910 or a 1-bit beeper can usefully produce.
 pub const AUDIO_SAMPLE_RATE: u32 = 44_100;
 
+/// A CPU-visible or debugger-visible address. Wide enough for every Core this
+/// project will host (24-bit 68000, 32-bit 68020 and later); a machine whose
+/// CPU has a narrower bus rejects or ignores what it cannot address. The
+/// buses a Core drives (`Bus`) keep the Core's own width -- only the
+/// `Machine` boundary and the plugin protocol use this type.
+///
+/// An address above what a machine can address wraps to its address space, as
+/// the machine's own address bus would (a 16-bit machine uses the low 16 bits).
+/// The plugin command handlers are stricter: they reject such an address with
+/// an error instead of wrapping it.
+pub type Addr = u64;
+
+/// A frame rate as an exact ratio, so 59.94 Hz and 49.92 Hz do not drift
+/// against audio over a long run the way a rounded whole number does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameRate {
+    pub num: u32,
+    pub den: u32,
+}
+
+impl FrameRate {
+    /// A whole number of frames per second (`num / 1`).
+    #[must_use]
+    pub const fn whole(hz: u32) -> Self {
+        Self { num: hz, den: 1 }
+    }
+
+    /// The rate in Hz as a float, for pacing arithmetic.
+    #[must_use]
+    pub fn hz(self) -> f64 {
+        f64::from(self.num) / f64::from(self.den.max(1))
+    }
+}
+
+/// The layout of the samples `Machine::drain_audio` returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioFormat {
+    /// Interleaved channels: 1 = mono, 2 = stereo (left, right, left, ...).
+    pub channels: u8,
+    pub sample_rate: u32,
+}
+
+impl AudioFormat {
+    /// Mono at `AUDIO_SAMPLE_RATE`: what every machine produced before
+    /// `audio_format` existed.
+    pub const MONO: Self = Self {
+        channels: 1,
+        sample_rate: AUDIO_SAMPLE_RATE,
+    };
+}
+
 /// A CPU + memory system driven by a fixed clock rate. Implemented once per
 /// concrete computer (ZX81, ZX Spectrum, ...); `emu` and any future UI only
 /// ever hold a `Box<dyn Machine>`, so they work the same way regardless of
@@ -36,6 +87,24 @@ pub trait Machine {
     /// NTSC/Japan). Read by each machine's own `run()` to build a `Clock`
     /// at the right tick rate -- distinct from `clock_hz` (CPU speed).
     fn frame_hz(&self) -> u64;
+
+    /// The exact frame rate. Defaults to `frame_hz()` as a whole number; a
+    /// machine whose real rate is fractional (NTSC 59.94, 49.92) overrides it
+    /// and keeps `frame_hz()` as the rounded value.
+    fn frame_rate(&self) -> FrameRate {
+        FrameRate::whole(u32::try_from(self.frame_hz()).unwrap_or(u32::MAX))
+    }
+
+    /// The width:height ratio of one pixel of `render_frame`'s output.
+    /// `(1, 1)` is square; the Atari ST low-res or a console picture is not.
+    fn pixel_aspect(&self) -> (u16, u16) {
+        (1, 1)
+    }
+
+    /// The layout of `drain_audio`'s samples.
+    fn audio_format(&self) -> AudioFormat {
+        AudioFormat::MONO
+    }
 
     /// Runs this machine until `running` returns false, checked between
     /// instructions.
@@ -67,7 +136,7 @@ pub trait Machine {
     /// this must never cost more than a direct field read -- a default that
     /// derived it from `registers()` would silently reintroduce the
     /// allocation this method exists to avoid.
-    fn pc(&self) -> u16;
+    fn pc(&self) -> Addr;
 
     /// Ordered register name/value pairs, e.g. `[("AF", 0x2A00), ...]`.
     /// Order and register set are chip-specific; the shape is uniform so a
@@ -97,7 +166,7 @@ pub trait Machine {
     /// Pure read of one memory byte for display purposes -- does not go
     /// through the CPU's normal bus read path (which may have side effects
     /// for I/O-mapped reads).
-    fn read_memory(&self, addr: u16) -> u8;
+    fn read_memory(&self, addr: Addr) -> u8;
 
     /// Loads bytes into memory starting at `addr`, through normal write
     /// semantics (a write into ROM is dropped, matching real hardware).
@@ -107,12 +176,12 @@ pub trait Machine {
     /// counted. A caller that needs its whole payload in memory (e.g. a test
     /// program ending in `HALT`) should compare the result against
     /// `bytes.len()` rather than assume it all landed.
-    fn load(&mut self, addr: u16, bytes: &[u8]) -> usize;
+    fn load(&mut self, addr: Addr, bytes: &[u8]) -> usize;
 
     /// Sets the program counter. Real hardware always resets to a fixed
     /// vector; this lets a caller (e.g. `emu`) point execution at a loaded
     /// test program instead, since there's no real ROM boot code yet.
-    fn set_pc(&mut self, addr: u16);
+    fn set_pc(&mut self, addr: Addr);
 
     /// Raises this machine's frame interrupt (e.g. a ZX Spectrum ULA's
     /// once-per-50Hz-frame `INT` line). Meant to be called once per
@@ -131,8 +200,9 @@ pub trait Machine {
     fn request_interrupt(&mut self) {}
 
     /// Drains and returns every audio sample this machine has generated
-    /// since the last call, as mono `f32` PCM in `-1.0..=1.0`, at
-    /// `AUDIO_SAMPLE_RATE`. A no-op default returning an empty `Vec` for a
+    /// since the last call, as interleaved `f32` PCM in `-1.0..=1.0` in the
+    /// layout `audio_format()` reports (mono at `AUDIO_SAMPLE_RATE` unless a
+    /// machine says otherwise). A no-op default returning an empty `Vec` for a
     /// machine with no audio hardware modeled (or none at all, like ZX81)
     /// -- same "plain method, no `Self: Sized` needed" reasoning as
     /// `render_frame`/`request_interrupt` above.
@@ -191,4 +261,30 @@ pub trait Machine {
     /// should be a compile error for callers expecting one, not a silent
     /// no-op indistinguishable from "it worked."
     fn reset(&mut self);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fractional_frame_rate_keeps_its_exact_value() {
+        let ntsc = FrameRate {
+            num: 60_000,
+            den: 1001,
+        };
+        assert!((ntsc.hz() - 59.940_059_94).abs() < 1e-6);
+        assert_eq!(FrameRate::whole(50).hz(), 50.0);
+    }
+
+    #[test]
+    fn the_default_audio_format_is_what_every_machine_produced_before() {
+        assert_eq!(
+            AudioFormat::MONO,
+            AudioFormat {
+                channels: 1,
+                sample_rate: AUDIO_SAMPLE_RATE
+            }
+        );
+    }
 }

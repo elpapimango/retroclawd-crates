@@ -20,8 +20,8 @@
 
 use plugin_api::PROTOCOL_VERSION;
 
-const RECORDED_VERSION: u16 = 10;
-const RECORDED_FINGERPRINT: u64 = 0x55a3_e010_92a4_e708;
+const RECORDED_VERSION: u16 = 11;
+const RECORDED_FINGERPRINT: u64 = 0x2043_827b_cfb0_7253;
 
 fn fingerprint(source: &str) -> u64 {
     // Strip `//` comments (doc comments included) and collapse whitespace,
