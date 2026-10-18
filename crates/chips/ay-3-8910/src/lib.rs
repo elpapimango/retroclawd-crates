@@ -222,6 +222,14 @@ impl Envelope {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ay3_8910 {
     selected_register: u8,
+    /// False after a register select whose value had a non-zero upper nibble: the chip's address latch only
+    /// takes values `0..=15` (the other four bits are its chip address), so such a select leaves no register
+    /// chosen -- writes are ignored and reads give an open bus (`0xFF`), as the CPC acid test `psg` finds
+    /// on real machines.
+    #[serde(default = "register_valid_default")]
+    register_valid: bool,
+    /// The mixer/I-O control register (7) exactly as written: bits 6 and 7 are the direction of ports A and B.
+    mixer: u8,
     channels: [ToneChannel; 3],
     noise: Noise,
     envelope: Envelope,
@@ -230,6 +238,10 @@ pub struct Ay3_8910 {
     /// per host machine, most of which don't wire anything meaningful to
     /// them at all).
     io_ports: [u8; 2],
+}
+
+fn register_valid_default() -> bool {
+    true
 }
 
 impl Default for Ay3_8910 {
@@ -242,6 +254,8 @@ impl Ay3_8910 {
     pub fn new() -> Self {
         Self {
             selected_register: 0,
+            register_valid: true,
+            mixer: 0,
             channels: [ToneChannel::default(); 3],
             noise: Noise {
                 lfsr: 1,
@@ -253,13 +267,32 @@ impl Ay3_8910 {
     }
 
     /// Latches which of the 16 registers subsequent `write`/`read` calls
-    /// target. Real hardware only has 4 address bits here -- `reg & 0xF`.
+    /// target. A value above 15 selects nothing (see `register_valid`).
     pub fn select_register(&mut self, reg: u8) {
         self.selected_register = reg & 0x0F;
+        self.register_valid = reg & 0xF0 == 0;
+    }
+
+    /// Whether the last select chose a real register.
+    pub fn register_valid(&self) -> bool {
+        self.register_valid
+    }
+
+    /// Direction of I/O port `port` (0 = A on register 14, 1 = B on 15), from bits 6 and 7 of register 7: true = output.
+    pub fn io_port_output(&self, port: usize) -> bool {
+        self.mixer & (0x40 << (port & 1)) != 0
+    }
+
+    /// The output latch of I/O port `port` (what was last written to register 14/15, whatever the direction).
+    pub fn io_port_latch(&self, port: usize) -> u8 {
+        self.io_ports[port & 1]
     }
 
     /// Writes `value` to whichever register `select_register` last chose.
     pub fn write(&mut self, value: u8) {
+        if !self.register_valid {
+            return;
+        }
         match self.selected_register {
             0 => self.channels[0].period = (self.channels[0].period & 0xFF00) | value as u16,
             1 => {
@@ -278,6 +311,7 @@ impl Ay3_8910 {
             }
             6 => self.noise.period = value & 0x1F,
             7 => {
+                self.mixer = value;
                 // Mixer: bit N = 1 means that source is DISABLED (real
                 // AY-3-8910 convention -- 0 enables).
                 for (i, ch) in self.channels.iter_mut().enumerate() {
@@ -318,6 +352,9 @@ impl Ay3_8910 {
 
     /// Reads back whichever register `select_register` last chose.
     pub fn read(&self) -> u8 {
+        if !self.register_valid {
+            return 0xFF;
+        }
         self.read_register(self.selected_register)
     }
 
@@ -334,18 +371,7 @@ impl Ay3_8910 {
             4 => self.channels[2].period as u8,
             5 => (self.channels[2].period >> 8) as u8,
             6 => self.noise.period,
-            7 => {
-                let mut v = 0u8;
-                for (i, ch) in self.channels.iter().enumerate() {
-                    if !ch.tone_enabled {
-                        v |= 1 << i;
-                    }
-                    if !ch.noise_enabled {
-                        v |= 1 << (i + 3);
-                    }
-                }
-                v
-            }
+            7 => self.mixer,
             8 => {
                 self.channels[0].volume
                     | if self.channels[0].use_envelope {
@@ -423,6 +449,29 @@ impl Ay3_8910 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CPC acid test `psg`: selecting a register number above 15 chooses nothing -- writes are ignored,
+    /// reads give an open bus -- and register 7 keeps all eight bits (6 and 7 are the I/O port directions).
+    #[test]
+    fn an_invalid_register_select_ignores_writes_and_reads_ff_and_register_7_keeps_its_top_bits() {
+        let mut ay = Ay3_8910::new();
+        ay.select_register(0);
+        ay.write(0x33);
+        ay.select_register(0x10);
+        assert!(!ay.register_valid());
+        ay.write(0x77);
+        assert_eq!(ay.read(), 0xFF);
+        ay.select_register(0);
+        assert!(ay.register_valid());
+        assert_eq!(ay.read(), 0x33, "the write while nothing was selected changed nothing");
+        ay.select_register(7);
+        ay.write(0xC1);
+        assert_eq!(ay.read(), 0xC1);
+        assert!(ay.io_port_output(0) && ay.io_port_output(1));
+        ay.write(0x3F);
+        assert!(!ay.io_port_output(0));
+    }
+
 
     fn write_reg(ay: &mut Ay3_8910, reg: u8, value: u8) {
         ay.select_register(reg);
