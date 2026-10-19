@@ -54,11 +54,21 @@
 //! `TODO.md` ("Acid suites").
 //!
 //! Further simplifications (documented, not hardware claims): the `MT`
-//! (multi-track) bit is accepted but not acted on; DMA mode is not modelled;
+//! (multi-track) bit is accepted but not acted on;
 //! two drives exist (units 0 and 1; the CPC and +3 interfaces wire only US0, so
 //! units 2 and 3 are drives 0 and 1 again, each with its own present cylinder
 //! number; an empty drive is not ready); seek time without `enable_timing` is
 //! opt-in via `enable_seek_timing`.
+//!
+//! **DMA mode** (Specify with `ND` = 0): the main status register never shows
+//! `EXM`, and during an execution phase not `RQM` either (the chip raises DRQ
+//! instead), so the CPU moves no bytes. Neither the CPC nor the +3 wires DMA:
+//! on a CPC6128 `/DACK` is pulled up through a resistor, and Kevin Thacker's
+//! `fdc_read` shows a read ending with "data error" in ST1 and ST2 (`&20`,
+//! `&20`) once the sector has passed; a write (`fdc_write`'s "write data
+//! (dma)") ends normally. The bytes such a write puts on the disk are not
+//! known; this model writes `&FF`. With timing the command ends when the
+//! sector has turned past the head; without it, at the next status read.
 //!
 //! A drive whose ready line changes (its motor, a disk in or out) raises an
 //! interrupt, which Sense Interrupt Status reports for each unit the chip polls
@@ -408,6 +418,8 @@ pub struct FdcState {
     step_rate: u8,
     #[serde(default)]
     busy: u8,
+    #[serde(default)]
+    dma: bool,
 }
 
 impl FdcState {
@@ -476,6 +488,8 @@ pub struct Fdc<D: DiskMedium> {
     step_rate: u8,
     /// MSR D0-D3: a seek in progress or not yet reported, per unit.
     busy: u8,
+    /// DMA mode (Specify `ND` = 0): see "DMA mode" in the module doc.
+    dma: bool,
 }
 
 impl<D: DiskMedium> Default for Fdc<D> {
@@ -500,8 +514,12 @@ impl<D: DiskMedium> Fdc<D> {
             ready_seen: [false; UNITS],
             ready_changed: [false; UNITS],
             timing: None,
-            step_rate: 0,
+            // The step rate before any Specify: the value AMSDOS and +3DOS both
+            // specify (`&A`, 12 ms), so a machine resumed from a snapshot -- which
+            // does not carry the FDC -- seeks at the speed its DOS waits for.
+            step_rate: 0x0A,
             busy: 0,
+            dma: false,
         }
     }
 
@@ -666,6 +684,25 @@ impl<D: DiskMedium> Fdc<D> {
     fn advance_phase(&mut self) {
         let Some(t) = self.timing else { return };
         loop {
+            if self.dma
+                && let Phase::Execution {
+                    dir,
+                    buffer,
+                    pos,
+                    expected,
+                    ready_at,
+                    ..
+                } = &self.phase
+            {
+                let left = match dir {
+                    Dir::ToCpu => buffer.len().saturating_sub(*pos),
+                    Dir::FromCpu => expected.saturating_sub(buffer.len()),
+                };
+                if t.now >= *ready_at + left as u64 * t.byte_t {
+                    self.finish_dma_transfer();
+                }
+                return;
+            }
             match &self.phase {
                 Phase::Waiting { until, .. } if t.now >= *until => {
                     let Phase::Waiting { next, .. } =
@@ -764,6 +801,7 @@ impl<D: DiskMedium> Fdc<D> {
             timing: self.timing,
             step_rate: self.step_rate,
             busy: self.busy,
+            dma: self.dma,
         }
     }
 
@@ -787,6 +825,7 @@ impl<D: DiskMedium> Fdc<D> {
         }
         self.step_rate = state.step_rate;
         self.busy = state.busy;
+        self.dma = state.dma;
     }
 
     /// Main status register. Idle `0x80`; receiving parameters `0x90`
@@ -798,6 +837,13 @@ impl<D: DiskMedium> Fdc<D> {
         let now = self.now();
         let timed = self.timing.is_some();
         let busy = self.busy;
+        if self.dma && matches!(self.phase, Phase::Execution { .. }) {
+            if !timed {
+                self.finish_dma_transfer();
+                return self.read_msr();
+            }
+            return CB | busy;
+        }
         let status = match &mut self.phase {
             Phase::Idle => RQM,
             // The command phase only exists once the opcode byte has
@@ -831,6 +877,9 @@ impl<D: DiskMedium> Fdc<D> {
     /// Data register read (execution-read data or result byte). Returns
     /// `0xFF` when the controller has nothing to send.
     pub fn read_data(&mut self) -> u8 {
+        if self.dma && matches!(self.phase, Phase::Execution { .. }) {
+            return 0xFF; // DMA mode: the data goes over DACK, not the data register
+        }
         match std::mem::replace(&mut self.phase, Phase::Idle) {
             Phase::Result { bytes, pos } => {
                 let byte = bytes.get(pos).copied().unwrap_or(0);
@@ -897,6 +946,9 @@ impl<D: DiskMedium> Fdc<D> {
     /// Data register write (command byte, parameter, or execution-write
     /// data). Ignored while the controller is sending.
     pub fn write_data(&mut self, val: u8) {
+        if self.dma && matches!(self.phase, Phase::Execution { .. }) {
+            return; // DMA mode: see `read_data`
+        }
         match std::mem::replace(&mut self.phase, Phase::Idle) {
             Phase::Idle => match param_count(val & 0x1F) {
                 Some(0) => self.execute(val, &[]),
@@ -984,6 +1036,7 @@ impl<D: DiskMedium> Fdc<D> {
             op::SPECIFY => {
                 // SRT in the high nibble; head load/unload times are not modelled.
                 self.step_rate = params[0] >> 4;
+                self.dma = params[1] & 0x01 == 0;
                 self.phase = Phase::Idle;
             }
             op::SENSE_DRIVE_STATUS => self.sense_drive_status(params[0]),
@@ -1134,6 +1187,10 @@ impl<D: DiskMedium> Fdc<D> {
         let mut st1 = 0;
         let (mut c, mut h, mut r, mut n) = (self.cylinders[self.unit], (unit_byte >> 2) & 1, 0, 0);
         let mut wait = 0;
+        // Byte times spent searching for the ID (`CB` only) before the chip
+        // reads it (`EXM|CB`, in DMA mode too: `fdc_gen`'s "read id dma mode"
+        // reads `&10` at once and sees `EXM` later).
+        let mut search = 0;
         if !self.ready(unit_byte) {
             st0 |= 0x48;
         } else {
@@ -1149,7 +1206,8 @@ impl<D: DiskMedium> Fdc<D> {
                 let mut idx = self.current_sector;
                 if self.timing.is_some() {
                     idx = self.next_sector_index(count);
-                    wait = self.bytes_until(Self::id_start(count, idx)) + ID_FIELD_BYTES;
+                    search = self.bytes_until(Self::id_start(count, idx));
+                    wait = ID_FIELD_BYTES;
                 }
                 if idx >= count {
                     idx = 0;
@@ -1174,9 +1232,59 @@ impl<D: DiskMedium> Fdc<D> {
                 pos: 0,
             },
         );
+        if let (Some(t), Phase::Waiting { .. }) = (self.timing, &self.phase)
+            && search > 0
+        {
+            let reading = std::mem::replace(&mut self.phase, Phase::Idle);
+            self.phase = Phase::Waiting {
+                until: t.now + search * t.byte_t,
+                msr: CB,
+                next: Box::new(reading),
+            };
+            if let Phase::Waiting { next, .. } = &mut self.phase
+                && let Phase::Waiting { until, .. } = next.as_mut()
+            {
+                *until += search * t.byte_t;
+            }
+        }
+    }
+
+    /// `EXM` for a data command's execution phase: never in DMA mode.
+    fn exm(&self) -> u8 {
+        if self.dma { 0 } else { EXM }
     }
 
     // ---- data transfer commands ----------------------------------------
+
+    /// Ends a DMA-mode execution phase as the unanswered DMA leaves it (see
+    /// "DMA mode" in the module doc): a read with data errors, a write or
+    /// format with `&FF` bytes.
+    fn finish_dma_transfer(&mut self) {
+        let Phase::Execution {
+            mut active,
+            dir,
+            mut buffer,
+            expected,
+            ..
+        } = std::mem::replace(&mut self.phase, Phase::Idle)
+        else {
+            return;
+        };
+        match dir {
+            Dir::ToCpu => {
+                self.current_sector = active.sector_index + 1;
+                active.st0 = (active.st0 & 0x3F) | 0x40;
+                active.st1 |= 0x20;
+                // A data error drops the control mark, as `Active::load_status` does.
+                active.st2 = (active.st2 & !0x40) | 0x20;
+                self.finish(&active);
+            }
+            Dir::FromCpu => {
+                buffer.resize(expected, 0xFF);
+                self.finish_write_transfer(active, buffer);
+            }
+        }
+    }
 
     fn finish(&mut self, active: &Active) {
         self.phase = Phase::Result {
@@ -1390,7 +1498,7 @@ impl<D: DiskMedium> Fdc<D> {
             a.load_status();
             self.after(
                 DATA_CRC_BYTES,
-                EXM | CB,
+                self.exm() | CB,
                 Phase::Result {
                     bytes: a.result_bytes(),
                     pos: 0,
@@ -1527,7 +1635,7 @@ impl<D: DiskMedium> Fdc<D> {
         }
         self.after(
             DATA_CRC_BYTES,
-            EXM | CB,
+            self.exm() | CB,
             Phase::Result {
                 bytes: a.result_bytes(),
                 pos: 0,
@@ -1569,7 +1677,7 @@ impl<D: DiskMedium> Fdc<D> {
             a.st1 |= 0x80;
             self.after(
                 DATA_CRC_BYTES,
-                EXM | CB,
+                self.exm() | CB,
                 Phase::Result {
                     bytes: a.result_bytes(),
                     pos: 0,
@@ -1624,7 +1732,7 @@ impl<D: DiskMedium> Fdc<D> {
         let wait = self.bytes_until(0) + INDEX_GAP_BYTES;
         self.after(
             wait,
-            EXM | CB,
+            self.exm() | CB,
             Phase::Execution {
                 active: a,
                 dir: Dir::FromCpu,
@@ -1671,7 +1779,7 @@ impl<D: DiskMedium> Fdc<D> {
         // A format ends at the next index hole (not at once when it was refused).
         if a.st0 & 0xC0 == 0 {
             let wait = self.bytes_until(0);
-            self.after(wait, EXM | CB, result);
+            self.after(wait, self.exm() | CB, result);
         } else {
             self.phase = result;
         }

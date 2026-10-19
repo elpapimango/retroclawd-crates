@@ -1046,3 +1046,80 @@ fn a_ready_change_raises_an_interrupt_for_each_unit_of_the_drive() {
     f.set_motor(true);
     assert!(drain_interrupts(&mut f).is_empty());
 }
+
+// ---- DMA mode (Specify ND = 0) ------------------------------------------
+
+/// Specify with `ND` clear: DMA mode.
+fn dma_mode(f: &mut Fdc<TestDisk>) {
+    send(f, &[0x03, 0xDF, 0x02]);
+}
+
+/// Ticks a timed controller until it offers a result, collecting every main
+/// status register value seen on the way.
+fn tick_to_result(f: &mut Fdc<TestDisk>) -> Vec<u8> {
+    let mut seen = Vec::new();
+    for _ in 0..100_000 {
+        let m = f.read_msr();
+        if m == RQM | DIO | CB {
+            return seen;
+        }
+        seen.push(m);
+        f.tick(64);
+    }
+    panic!("no result phase");
+}
+
+#[test]
+fn a_dma_mode_read_moves_no_bytes_and_ends_with_data_errors() {
+    // Untimed: the execution phase ends at the next status read.
+    let mut f = fdc(one_track_disk());
+    dma_mode(&mut f);
+    send(&mut f, &read_cmd(0, 0, 0, 0xC1, 2, 0xC1));
+    assert_eq!(results(&mut f), vec![0x40, 0x20, 0x20, 0, 0, 0xC1, 2]);
+
+    // Timed: never EXM or RQM while the sector passes, the data register gives nothing.
+    let mut f = fdc(one_track_disk());
+    f.enable_timing(4_000_000);
+    dma_mode(&mut f);
+    send(&mut f, &read_cmd(0, 0, 0, 0xC1, 2, 0xC1));
+    let seen = tick_to_result(&mut f);
+    assert!(seen.iter().all(|&m| m == CB), "{seen:02X?}");
+    assert_eq!(results(&mut f), vec![0x40, 0x20, 0x20, 0, 0, 0xC1, 2]);
+
+    // Back in non-DMA mode the same read hands the sector over.
+    send(&mut f, &[0x03, 0xDF, 0x03]);
+    send(&mut f, &read_cmd(0, 0, 0, 0xC1, 2, 0xC1));
+    let mut data = Vec::new();
+    for _ in 0..1_000_000 {
+        let m = f.read_msr();
+        if m == RQM | DIO | CB {
+            break;
+        }
+        if m & (RQM | EXM) == RQM | EXM {
+            data.push(f.read_data());
+        }
+        f.tick(16);
+    }
+    assert_eq!(data, vec![0x11; 512]);
+}
+
+#[test]
+fn a_dma_mode_write_ends_normally_and_read_id_shows_exm_only_while_reading_the_id() {
+    let mut f = fdc(one_track_disk());
+    f.enable_timing(4_000_000);
+    dma_mode(&mut f);
+    send(&mut f, &write_cmd(0, 0, 0, 0xC2, 2, 0xC2));
+    let seen = tick_to_result(&mut f);
+    assert!(seen.iter().all(|&m| m == CB), "{seen:02X?}");
+    assert_eq!(results(&mut f), vec![0x40, 0x80, 0x00, 0, 0, 0xC2, 2]);
+    assert_eq!(f.disk().unwrap().tracks[0][1].copies[0], vec![0xFF; 512]);
+
+    // Read ID is no data transfer: `CB` while it searches, `EXM|CB` while it
+    // reads the ID field, in DMA mode too.
+    send(&mut f, &[0x4A, 0x00]);
+    let seen = tick_to_result(&mut f);
+    assert_eq!(seen.first(), Some(&CB));
+    assert_eq!(seen.last(), Some(&(EXM | CB)));
+    assert!(seen.iter().all(|&m| m == CB || m == EXM | CB));
+    assert_eq!(results(&mut f).len(), 7);
+}
