@@ -28,12 +28,42 @@
 //!   of a command's sector ID, so sectors are found by matching all four
 //!   ID bytes (`CHRN`) on the physical track under the head.
 //!
-//! Deliberate simplifications (documented, not hardware claims): execution
-//! is instantaneous (no rotational latency, no overrun -- a byte the CPU is
-//! slow to fetch is never lost); the `MT` (multi-track) bit is accepted but
-//! not acted on; the Scan commands report "invalid command"; two drives exist
-//! (units 0 and 1; a command addressing another unit, or an empty one, finds it not ready); seek time
-//! is opt-in via `enable_seek_timing`.
+//! Without `enable_timing` execution is instantaneous (no rotational latency,
+//! no overrun -- a byte the CPU is slow to fetch is never lost). With it (the
+//! CPC) the disk turns: see "Timing" below.
+//!
+//! # Timing (`enable_timing`)
+//!
+//! The disk turns at 300 rpm and the MFM data stream carries one byte every
+//! 32 us, 6250 byte times a revolution. A track's sector IDs are spread evenly
+//! after the 146-byte index gap (`INDEX_GAP_BYTES`), each sector's data
+//! starting 60 bytes after its ID (`ID_TO_DATA_BYTES`). A Read/Write Data
+//! command waits until its sector comes round, then offers or asks for one
+//! byte every 32 us: the main status register shows RQM only while a byte is
+//! due, and a byte the CPU does not take (or give) before the next one ends the
+//! command with ST1 "overrun" (`&10`). A sector that is not found ends after two
+//! index holes; Read ID waits for the next ID; Format runs from one index hole
+//! to the next; Seek and Recalibrate step at the Specify step rate (`(16 - SRT)
+//! x 2 ms`, the CPC's 4 MHz clock), one cylinder at a time, keeping a present
+//! cylinder number per unit, and keep the unit's busy bit (MSR D0-D3) set until
+//! Sense Interrupt Status reports the seek. While the chip searches for a sector
+//! the main status register reads `CB` (`&10`; `fdc_read`'s "read data" reads it
+//! right after the command); during Read ID and Format it reads `CB|EXM`
+//! (`&30`). Kevin Thacker's `fdc_*` acid programs are the reference for these
+//! behaviours; what they still find is listed in the host repository's
+//! `TODO.md` ("Acid suites").
+//!
+//! Further simplifications (documented, not hardware claims): the `MT`
+//! (multi-track) bit is accepted but not acted on; DMA mode is not modelled;
+//! two drives exist (units 0 and 1; the CPC and +3 interfaces wire only US0, so
+//! units 2 and 3 are drives 0 and 1 again, each with its own present cylinder
+//! number; an empty drive is not ready); seek time without `enable_timing` is
+//! opt-in via `enable_seek_timing`.
+//!
+//! A drive whose ready line changes (its motor, a disk in or out) raises an
+//! interrupt, which Sense Interrupt Status reports for each unit the chip polls
+//! (0 to 3): ST0 `&C0` plus the unit, `&08` more when it became not ready, and
+//! the unit's cylinder.
 
 use serde::{Deserialize, Serialize};
 
@@ -125,6 +155,31 @@ pub trait DiskMedium {
 /// called on a given instance.
 const SEEK_TSTATES_PER_TRACK: u32 = 80;
 
+/// Microseconds per byte of the MFM data stream (250 kbit/s).
+const BYTE_US: u64 = 32;
+/// Byte times in one revolution at 300 rpm (200 ms / 32 us).
+const REVOLUTION_BYTES: u64 = 6250;
+/// Gap 4a, sync, index mark and gap 1: where the first ID starts.
+const INDEX_GAP_BYTES: u64 = 146;
+/// The ID field (sync, address mark, ID, CRC).
+const ID_FIELD_BYTES: u64 = 22;
+/// From the start of an ID field to its sector's first data byte (ID field,
+/// gap 2, sync, data mark).
+const ID_TO_DATA_BYTES: u64 = 60;
+/// The data CRC, read before the next sector or the result phase.
+const DATA_CRC_BYTES: u64 = 2;
+
+/// The clock the chip's timing runs against (`enable_timing`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct Timing {
+    /// Host T-states per byte time.
+    byte_t: u64,
+    /// Host T-states per millisecond.
+    ms_t: u64,
+    /// Host T-states since timing was enabled.
+    now: u64,
+}
+
 const RQM: u8 = 0x80;
 const DIO: u8 = 0x40;
 const EXM: u8 = 0x20;
@@ -144,6 +199,9 @@ mod op {
     pub const READ_DELETED_DATA: u8 = 0x0C;
     pub const FORMAT_TRACK: u8 = 0x0D;
     pub const SEEK: u8 = 0x0F;
+    pub const SCAN_EQUAL: u8 = 0x11;
+    pub const SCAN_LOW_OR_EQUAL: u8 = 0x19;
+    pub const SCAN_HIGH_OR_EQUAL: u8 = 0x1D;
 }
 
 /// Number of parameter bytes the command phase needs after the opcode, per
@@ -155,7 +213,10 @@ fn param_count(command: u8) -> Option<usize> {
         | op::WRITE_DATA
         | op::READ_DATA
         | op::WRITE_DELETED_DATA
-        | op::READ_DELETED_DATA => Some(8),
+        | op::READ_DELETED_DATA
+        | op::SCAN_EQUAL
+        | op::SCAN_LOW_OR_EQUAL
+        | op::SCAN_HIGH_OR_EQUAL => Some(8),
         op::SPECIFY => Some(2),
         op::SENSE_DRIVE_STATUS | op::RECALIBRATE | op::READ_ID => Some(1),
         op::SENSE_INTERRUPT_STATUS => Some(0),
@@ -173,11 +234,23 @@ enum Kind {
     WriteData,
     WriteDeleted,
     Format,
+    /// The Scan commands: the CPU supplies a sector's worth of bytes, which
+    /// the chip compares with the sector's.
+    ScanEqual,
+    ScanLowOrEqual,
+    ScanHighOrEqual,
 }
 
 impl Kind {
     fn is_write(self) -> bool {
         matches!(self, Kind::WriteData | Kind::WriteDeleted | Kind::Format)
+    }
+
+    fn is_scan(self) -> bool {
+        matches!(
+            self,
+            Kind::ScanEqual | Kind::ScanLowOrEqual | Kind::ScanHighOrEqual
+        )
     }
 }
 
@@ -256,6 +329,16 @@ enum Phase {
         /// Reads of the main status register that still report "not
         /// ready" before data is offered (Caprice32's `read_status_delay`).
         delay: u8,
+        /// With timing: when the byte at `pos` (or the next one to write) is due.
+        #[serde(default)]
+        ready_at: u64,
+    },
+    /// With timing: the command waits for the disk (or for its result); the
+    /// main status register reads `msr` until `until`, then `next` begins.
+    Waiting {
+        until: u64,
+        msr: u8,
+        next: Box<Phase>,
     },
     Result {
         bytes: Vec<u8>,
@@ -263,15 +346,41 @@ enum Phase {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// One unit's Seek or Recalibrate. The chip keeps a present cylinder number
+/// (PCN) per unit (0 to 3) and steps the drive the unit selects; units 0 and 2
+/// (1 and 3) step the same head here, so two overlapped seeks on them move it
+/// both ways (`fdc_seek`'s "seek drive n and drive n+2").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 enum SeekState {
+    #[default]
     None,
-    InFlight { remaining: u32, st0: u8, pcn: u8 },
-    Done { st0: u8, pcn: u8 },
+    /// Stepping towards `target`, one cylinder every `step_t` T-states,
+    /// `remaining` until the next step. A recalibrate steps out until the
+    /// drive's track 0 sensor (at most 77 steps).
+    InFlight {
+        remaining: u32,
+        st0: u8,
+        target: u8,
+        step_t: u32,
+        recalibrate: bool,
+        steps: u8,
+    },
+    /// Finished; Sense Interrupt Status reports it.
+    Done { st0: u8 },
 }
 
 /// How many drives the controller addresses (unit select 0 and 1).
 pub const DRIVES: usize = 2;
+
+/// Units the chip polls for ready changes (US1/US0).
+const UNITS: usize = 4;
+
+/// The drive a unit-select byte reaches: only US0 is wired, so units 2 and 3
+/// are drives 0 and 1 (Kevin Thacker's `fdc_gen` "sense drive status (2
+/// drives)" reads unit 2 as drive 0 on a CPC).
+fn drive_of(unit_byte: u8) -> usize {
+    usize::from(unit_byte & 0x01)
+}
 
 /// `Fdc`'s own live state, for save states -- deliberately excludes the
 /// inserted disk (`Fdc::disk`); a host that lets the disk be modified
@@ -282,10 +391,23 @@ pub struct FdcState {
     unit: usize,
     current_sector: usize,
     phase: Phase,
-    seek: SeekState,
+    #[serde(default)]
+    seeks: [SeekState; UNITS],
+    #[serde(default)]
+    pcn: [u8; UNITS],
     seek_timing_enabled: bool,
     weak_read_counter: u32,
     motor: bool,
+    #[serde(default)]
+    ready_seen: [bool; UNITS],
+    #[serde(default)]
+    ready_changed: [bool; UNITS],
+    #[serde(default)]
+    timing: Option<Timing>,
+    #[serde(default)]
+    step_rate: u8,
+    #[serde(default)]
+    busy: u8,
 }
 
 impl FdcState {
@@ -304,7 +426,7 @@ impl FdcState {
         match self.phase {
             Phase::Idle => "idle",
             Phase::Command { .. } => "command",
-            Phase::Execution { .. } => "execution",
+            Phase::Execution { .. } | Phase::Waiting { .. } => "execution",
             Phase::Result { .. } => "result",
         }
     }
@@ -327,7 +449,9 @@ pub struct Fdc<D: DiskMedium> {
     /// head on the current track.
     current_sector: usize,
     phase: Phase,
-    seek: SeekState,
+    /// Each unit's Seek/Recalibrate and present cylinder number.
+    seeks: [SeekState; UNITS],
+    pcn: [u8; UNITS],
     /// Opt-in (`enable_seek_timing`): whether Seek/Recalibrate report Seek
     /// End only after a bounded real-time delay instead of instantly.
     seek_timing_enabled: bool,
@@ -342,6 +466,16 @@ pub struct Fdc<D: DiskMedium> {
     /// Drive motor. A drive is only ready while its motor spins; hosts
     /// mirror their motor latch here with `set_motor`.
     motor: bool,
+    /// Each polled unit's ready line as last seen, and whether it changed
+    /// since Sense Interrupt Status last reported it.
+    ready_seen: [bool; UNITS],
+    ready_changed: [bool; UNITS],
+    /// `enable_timing`: the disk turns and the data stream has a rate.
+    timing: Option<Timing>,
+    /// The Specify command's step rate (SRT).
+    step_rate: u8,
+    /// MSR D0-D3: a seek in progress or not yet reported, per unit.
+    busy: u8,
 }
 
 impl<D: DiskMedium> Default for Fdc<D> {
@@ -358,10 +492,91 @@ impl<D: DiskMedium> Fdc<D> {
             cylinders: [0; DRIVES],
             current_sector: 0,
             phase: Phase::Idle,
-            seek: SeekState::None,
+            seeks: [SeekState::None; UNITS],
+            pcn: [0; UNITS],
             seek_timing_enabled: false,
             weak_read_counter: 0,
             motor: true,
+            ready_seen: [false; UNITS],
+            ready_changed: [false; UNITS],
+            timing: None,
+            step_rate: 0,
+            busy: 0,
+        }
+    }
+
+    /// Turns the disk and gives the data stream its rate (see "Timing" in the
+    /// module doc): the host then calls `tick` with the T-states of a
+    /// `cpu_hz` clock. Implies `enable_seek_timing`.
+    pub fn enable_timing(&mut self, cpu_hz: u32) {
+        self.seek_timing_enabled = true;
+        self.timing = Some(Timing {
+            byte_t: u64::from(cpu_hz) * BYTE_US / 1_000_000,
+            ms_t: u64::from(cpu_hz) / 1000,
+            now: 0,
+        });
+    }
+
+    fn now(&self) -> u64 {
+        self.timing.map_or(0, |t| t.now)
+    }
+
+    /// Where the head is on the track, in byte times since the index hole.
+    fn rotation(&self) -> u64 {
+        self.timing
+            .map_or(0, |t| (t.now / t.byte_t.max(1)) % REVOLUTION_BYTES)
+    }
+
+    /// Byte times from the head's position to `target` (0 = the index hole).
+    fn bytes_until(&self, target: u64) -> u64 {
+        (target % REVOLUTION_BYTES + REVOLUTION_BYTES - self.rotation()) % REVOLUTION_BYTES
+    }
+
+    /// Where the `index`th of `count` sector IDs starts.
+    fn id_start(count: usize, index: usize) -> u64 {
+        let spacing = (REVOLUTION_BYTES - INDEX_GAP_BYTES) / (count.max(1) as u64);
+        INDEX_GAP_BYTES + index as u64 * spacing
+    }
+
+    /// The first sector ID to pass under the head from now on.
+    fn next_sector_index(&self, count: usize) -> usize {
+        let pos = self.rotation();
+        (0..count)
+            .find(|&i| Self::id_start(count, i) >= pos)
+            .unwrap_or(0)
+    }
+
+    /// Enters `phase` after `bytes` byte times (at once without timing),
+    /// reading `msr` meanwhile. An execution phase's first byte is due then.
+    fn after(&mut self, bytes: u64, msr: u8, mut phase: Phase) {
+        let Some(t) = self.timing else {
+            self.phase = phase;
+            return;
+        };
+        let until = t.now + bytes * t.byte_t;
+        if let Phase::Execution {
+            ready_at, delay, ..
+        } = &mut phase
+        {
+            *ready_at = until;
+            *delay = 0;
+        }
+        self.phase = Phase::Waiting {
+            until,
+            msr,
+            next: Box::new(phase),
+        };
+    }
+
+    /// Polls every unit's ready line and latches an interrupt for each one
+    /// that changed.
+    fn poll_ready(&mut self) {
+        for unit in 0..UNITS {
+            let ready = self.ready(unit as u8);
+            if ready != self.ready_seen[unit] {
+                self.ready_seen[unit] = ready;
+                self.ready_changed[unit] = true;
+            }
         }
     }
 
@@ -379,22 +594,100 @@ impl<D: DiskMedium> Fdc<D> {
         if !self.seek_timing_enabled {
             return;
         }
-        if let SeekState::InFlight {
-            remaining,
-            st0,
-            pcn,
-        } = self.seek
-        {
-            let remaining = remaining.saturating_sub(tstates);
-            self.seek = if remaining == 0 {
-                SeekState::Done { st0, pcn }
-            } else {
-                SeekState::InFlight {
-                    remaining,
+        if let Some(t) = &mut self.timing {
+            t.now += u64::from(tstates);
+            self.advance_phase();
+        }
+        for unit in 0..UNITS {
+            self.step_unit(unit, tstates);
+        }
+    }
+
+    /// Lets `tstates` pass for `unit`'s seek: each step moves its PCN and its
+    /// drive's head one cylinder.
+    fn step_unit(&mut self, unit: usize, tstates: u32) {
+        let SeekState::InFlight {
+            mut remaining,
+            mut st0,
+            target,
+            step_t,
+            recalibrate,
+            mut steps,
+        } = self.seeks[unit]
+        else {
+            return;
+        };
+        let mut left = tstates;
+        loop {
+            if left < remaining {
+                self.seeks[unit] = SeekState::InFlight {
+                    remaining: remaining - left,
                     st0,
-                    pcn,
+                    target,
+                    step_t,
+                    recalibrate,
+                    steps,
+                };
+                return;
+            }
+            left -= remaining;
+            remaining = step_t.max(1);
+            let head = &mut self.cylinders[drive_of(unit as u8)];
+            if recalibrate || self.pcn[unit] > target {
+                self.pcn[unit] = self.pcn[unit].saturating_sub(1);
+                *head = head.saturating_sub(1);
+            } else if self.pcn[unit] < target {
+                self.pcn[unit] += 1;
+                *head = head.saturating_add(1);
+            }
+            steps = steps.saturating_add(1);
+            let done = if recalibrate {
+                if *head == 0 {
+                    self.pcn[unit] = 0;
+                    true
+                } else if steps >= 77 {
+                    st0 |= 0x50; // abnormal termination + equipment check: no track 0 after 77 steps
+                    true
+                } else {
+                    false
                 }
+            } else {
+                self.pcn[unit] == target
             };
+            if done {
+                self.seeks[unit] = SeekState::Done { st0 };
+                return;
+            }
+        }
+    }
+
+    /// Moves a waiting command on, and ends a transfer whose byte the CPU let
+    /// pass (overrun).
+    fn advance_phase(&mut self) {
+        let Some(t) = self.timing else { return };
+        loop {
+            match &self.phase {
+                Phase::Waiting { until, .. } if t.now >= *until => {
+                    let Phase::Waiting { next, .. } =
+                        std::mem::replace(&mut self.phase, Phase::Idle)
+                    else {
+                        unreachable!()
+                    };
+                    self.phase = *next;
+                }
+                Phase::Execution { ready_at, .. } if t.now >= *ready_at + t.byte_t => {
+                    let Phase::Execution { mut active, .. } =
+                        std::mem::replace(&mut self.phase, Phase::Idle)
+                    else {
+                        unreachable!()
+                    };
+                    active.st0 = (active.st0 & 0x3F) | 0x40;
+                    active.st1 |= 0x10; // overrun
+                    self.finish(&active);
+                    return;
+                }
+                _ => return,
+            }
         }
     }
 
@@ -422,11 +715,14 @@ impl<D: DiskMedium> Fdc<D> {
         if let Some(slot) = self.disks.get_mut(unit) {
             *slot = Some(disk);
         }
+        self.poll_ready();
     }
 
     /// Removes and returns the disk in `unit`, if any.
     pub fn eject_disk_from(&mut self, unit: usize) -> Option<D> {
-        self.disks.get_mut(unit).and_then(Option::take)
+        let disk = self.disks.get_mut(unit).and_then(Option::take);
+        self.poll_ready();
+        disk
     }
 
     /// The disk in `unit`, if any.
@@ -443,6 +739,7 @@ impl<D: DiskMedium> Fdc<D> {
     /// Drive Status reports RY clear.
     pub fn set_motor(&mut self, on: bool) {
         self.motor = on;
+        self.poll_ready();
     }
 
     pub fn motor(&self) -> bool {
@@ -457,10 +754,16 @@ impl<D: DiskMedium> Fdc<D> {
             unit: self.unit,
             current_sector: self.current_sector,
             phase: self.phase.clone(),
-            seek: self.seek,
+            seeks: self.seeks,
+            pcn: self.pcn,
             seek_timing_enabled: self.seek_timing_enabled,
             weak_read_counter: self.weak_read_counter,
             motor: self.motor,
+            ready_seen: self.ready_seen,
+            ready_changed: self.ready_changed,
+            timing: self.timing,
+            step_rate: self.step_rate,
+            busy: self.busy,
         }
     }
 
@@ -472,10 +775,18 @@ impl<D: DiskMedium> Fdc<D> {
         self.unit = state.unit.min(DRIVES - 1);
         self.current_sector = state.current_sector;
         self.phase = state.phase;
-        self.seek = state.seek;
+        self.seeks = state.seeks;
+        self.pcn = state.pcn;
         self.seek_timing_enabled = state.seek_timing_enabled;
         self.weak_read_counter = state.weak_read_counter;
         self.motor = state.motor;
+        self.ready_seen = state.ready_seen;
+        self.ready_changed = state.ready_changed;
+        if state.timing.is_some() {
+            self.timing = state.timing;
+        }
+        self.step_rate = state.step_rate;
+        self.busy = state.busy;
     }
 
     /// Main status register. Idle `0x80`; receiving parameters `0x90`
@@ -484,15 +795,27 @@ impl<D: DiskMedium> Fdc<D> {
     /// `0xD0`. The first read after an execution phase starts reports
     /// not-ready (`0x10`) once, like Caprice32.
     pub fn read_msr(&mut self) -> u8 {
-        match &mut self.phase {
+        let now = self.now();
+        let timed = self.timing.is_some();
+        let busy = self.busy;
+        let status = match &mut self.phase {
             Phase::Idle => RQM,
             // The command phase only exists once the opcode byte has
             // arrived, so the controller is already busy.
             Phase::Command { .. } => RQM | CB,
-            Phase::Execution { dir, delay, .. } => {
+            Phase::Waiting { msr, .. } => *msr,
+            Phase::Execution {
+                dir,
+                delay,
+                ready_at,
+                ..
+            } => {
                 if *delay > 0 {
                     *delay -= 1;
-                    return CB;
+                    return CB | busy;
+                }
+                if timed && now < *ready_at {
+                    return EXM | CB | busy;
                 }
                 let mut v = RQM | EXM | CB;
                 if *dir == Dir::ToCpu {
@@ -501,7 +824,8 @@ impl<D: DiskMedium> Fdc<D> {
                 v
             }
             Phase::Result { .. } => RQM | DIO | CB,
-        }
+        };
+        status | busy
     }
 
     /// Data register read (execution-read data or result byte). Returns
@@ -525,9 +849,29 @@ impl<D: DiskMedium> Fdc<D> {
                 pos,
                 expected,
                 delay,
+                ready_at,
             } => {
+                if self.timing.is_some() && self.now() < ready_at {
+                    // No byte has arrived yet: the data register still holds the last one.
+                    let byte = pos
+                        .checked_sub(1)
+                        .and_then(|p| buffer.get(p))
+                        .copied()
+                        .unwrap_or(0xFF);
+                    self.phase = Phase::Execution {
+                        active,
+                        dir: Dir::ToCpu,
+                        buffer,
+                        pos,
+                        expected,
+                        delay,
+                        ready_at,
+                    };
+                    return byte;
+                }
                 let byte = buffer.get(pos).copied().unwrap_or(0xFF);
                 let pos = pos + 1;
+                let byte_t = self.timing.map_or(0, |t| t.byte_t);
                 if pos >= buffer.len() {
                     self.finish_read_sector(active);
                 } else {
@@ -538,6 +882,7 @@ impl<D: DiskMedium> Fdc<D> {
                         pos,
                         expected,
                         delay,
+                        ready_at: ready_at + byte_t,
                     };
                 }
                 byte
@@ -592,11 +937,10 @@ impl<D: DiskMedium> Fdc<D> {
                 pos,
                 expected,
                 delay,
+                ready_at,
             } => {
-                buffer.push(val);
-                if buffer.len() >= expected {
-                    self.finish_write_transfer(active, buffer);
-                } else {
+                if self.timing.is_some() && self.now() < ready_at {
+                    // Not asked for yet: the byte is lost.
                     self.phase = Phase::Execution {
                         active,
                         dir: Dir::FromCpu,
@@ -604,6 +948,29 @@ impl<D: DiskMedium> Fdc<D> {
                         pos,
                         expected,
                         delay,
+                        ready_at,
+                    };
+                    return;
+                }
+                buffer.push(val);
+                if buffer.len() >= expected {
+                    self.finish_write_transfer(active, buffer);
+                } else {
+                    let byte_t = self.timing.map_or(0, |t| t.byte_t);
+                    // Format asks for the four ID bytes of each sector as that sector comes round.
+                    let gap = if active.kind == Kind::Format && buffer.len() % 4 == 0 {
+                        (REVOLUTION_BYTES - INDEX_GAP_BYTES) / u64::from(active.h.max(1)) - 3
+                    } else {
+                        1
+                    };
+                    self.phase = Phase::Execution {
+                        active,
+                        dir: Dir::FromCpu,
+                        buffer,
+                        pos,
+                        expected,
+                        delay,
+                        ready_at: ready_at + gap * byte_t,
                     };
                 }
             }
@@ -614,10 +981,14 @@ impl<D: DiskMedium> Fdc<D> {
     fn execute(&mut self, opcode: u8, params: &[u8]) {
         let skip = opcode & 0x20 != 0;
         match opcode & 0x1F {
-            op::SPECIFY => self.phase = Phase::Idle, // step/head timing not modelled
+            op::SPECIFY => {
+                // SRT in the high nibble; head load/unload times are not modelled.
+                self.step_rate = params[0] >> 4;
+                self.phase = Phase::Idle;
+            }
             op::SENSE_DRIVE_STATUS => self.sense_drive_status(params[0]),
-            op::RECALIBRATE => self.seek(params[0], 0),
-            op::SEEK => self.seek(params[0], params[1]),
+            op::RECALIBRATE => self.seek(params[0], 0, true),
+            op::SEEK => self.seek(params[0], params[1], false),
             op::SENSE_INTERRUPT_STATUS => self.sense_interrupt_status(),
             op::READ_ID => self.read_id(params[0]),
             op::READ_DATA => self.begin_transfer(Kind::ReadData, skip, params),
@@ -626,6 +997,9 @@ impl<D: DiskMedium> Fdc<D> {
             op::WRITE_DATA => self.begin_transfer(Kind::WriteData, false, params),
             op::WRITE_DELETED_DATA => self.begin_transfer(Kind::WriteDeleted, false, params),
             op::FORMAT_TRACK => self.begin_format(params),
+            op::SCAN_EQUAL => self.begin_transfer(Kind::ScanEqual, skip, params),
+            op::SCAN_LOW_OR_EQUAL => self.begin_transfer(Kind::ScanLowOrEqual, skip, params),
+            op::SCAN_HIGH_OR_EQUAL => self.begin_transfer(Kind::ScanHighOrEqual, skip, params),
             _ => {
                 self.phase = Phase::Result {
                     bytes: vec![0x80],
@@ -640,16 +1014,12 @@ impl<D: DiskMedium> Fdc<D> {
     /// Makes the unit a command's unit-select bits name the one `disks` and `cylinders` refer to. Units 2 and 3 do not exist: they
     /// leave the selection alone and are never ready.
     fn select_unit(&mut self, unit_byte: u8) {
-        let unit = usize::from(unit_byte & 0x03);
-        if unit < DRIVES {
-            self.unit = unit;
-        }
+        self.unit = drive_of(unit_byte);
     }
 
-    /// The addressed unit must exist, hold a disk and have its motor spinning (the CPC has one motor line for both drives).
+    /// The addressed drive must hold a disk and have its motor spinning (the CPC has one motor line for both drives).
     fn ready(&self, unit_byte: u8) -> bool {
-        let unit = usize::from(unit_byte & 0x03);
-        unit < DRIVES && self.disks[unit].is_some() && self.motor
+        self.disks[drive_of(unit_byte)].is_some() && self.motor
     }
 
     /// A single-sided image is always read on side 0.
@@ -682,39 +1052,78 @@ impl<D: DiskMedium> Fdc<D> {
         };
     }
 
-    fn seek(&mut self, unit_byte: u8, target: u8) {
+    fn seek(&mut self, unit_byte: u8, target: u8, recalibrate: bool) {
         self.select_unit(unit_byte);
+        let unit = usize::from(unit_byte & 0x03);
         let ready = self.ready(unit_byte);
-        let mut st0 = unit_byte & 0x07;
-        let mut distance = 1;
-        if ready {
-            distance = u32::from(target.abs_diff(self.cylinders[self.unit]).max(1));
-            self.cylinders[self.unit] = target;
-        } else {
-            st0 |= 0x48; // abnormal termination + not ready
-        }
-        let pcn = self.cylinders[self.unit];
-        self.seek = if self.seek_timing_enabled {
-            SeekState::InFlight {
-                remaining: distance * SEEK_TSTATES_PER_TRACK,
-                st0,
-                pcn,
-            }
-        } else {
-            SeekState::Done { st0, pcn }
-        };
+        let mut st0 = unit_byte & 0x03;
         self.phase = Phase::Idle; // Seek/Recalibrate have no result phase
+        if !ready {
+            // A drive that is not ready does not step.
+            st0 |= 0x48; // abnormal termination + not ready
+            self.seeks[unit] = SeekState::Done { st0 };
+            return;
+        }
+        if !self.seek_timing_enabled {
+            self.pcn[unit] = target;
+            self.cylinders[self.unit] = target;
+            self.seeks[unit] = SeekState::Done { st0 };
+            return;
+        }
+        let step_t = match self.timing {
+            // The Specify step rate, in 2 ms units at the CPC's 4 MHz FDC clock.
+            Some(t) => u64::from(16 - self.step_rate) * 2 * t.ms_t,
+            None => u64::from(SEEK_TSTATES_PER_TRACK),
+        };
+        let step_t = u32::try_from(step_t).unwrap_or(u32::MAX);
+        if self.timing.is_some() {
+            self.busy |= 1 << unit;
+        }
+        // A seek issued while the head still moves only changes where it goes; one that needs no step (already on
+        // the cylinder, or a recalibrate at track 0) ends at once (`fdc_seek`'s "seek command repeat (while seeking)"
+        // re-sends its Seek until Sense Interrupt Status reports the end).
+        let remaining = match self.seeks[unit] {
+            SeekState::InFlight { remaining, .. } => remaining,
+            _ if (!recalibrate && self.pcn[unit] == target)
+                || (recalibrate && self.cylinders[self.unit] == 0) =>
+            {
+                self.pcn[unit] = target;
+                self.seeks[unit] = SeekState::Done { st0 };
+                return;
+            }
+            _ => step_t,
+        };
+        self.seeks[unit] = SeekState::InFlight {
+            remaining,
+            st0,
+            target,
+            step_t,
+            recalibrate,
+            steps: 0,
+        };
     }
 
     fn sense_interrupt_status(&mut self) {
-        let bytes = match self.seek {
-            SeekState::Done { st0, pcn } => {
-                self.seek = SeekState::None;
-                vec![(st0 & 0xFB) | 0x20, pcn] // ST0 keeps US1/US0: the unit that finished the seek
+        let finished = (0..UNITS).find_map(|unit| match self.seeks[unit] {
+            SeekState::Done { st0 } => Some((unit, st0)),
+            _ => None,
+        });
+        let bytes = match finished {
+            Some((unit, st0)) => {
+                self.seeks[unit] = SeekState::None;
+                self.busy &= !(1 << unit);
+                vec![(st0 & 0xFB) | 0x20, self.pcn[unit]] // ST0 keeps US1/US0: the unit that finished the seek
             }
-            // Nothing pending (or the seek is still travelling): the chip
-            // answers "invalid command", and firmware polls again.
-            _ => vec![0x80],
+            None => match (0..UNITS).find(|&unit| self.ready_changed[unit]) {
+                Some(unit) => {
+                    self.ready_changed[unit] = false;
+                    let not_ready = if self.ready_seen[unit] { 0 } else { 0x08 };
+                    vec![0xC0 | not_ready | unit as u8, self.pcn[unit]]
+                }
+                // Nothing pending (or the seek is still travelling): the chip
+                // answers "invalid command", and firmware polls again.
+                None => vec![0x80],
+            },
         };
         self.phase = Phase::Result { bytes, pos: 0 };
     }
@@ -724,6 +1133,7 @@ impl<D: DiskMedium> Fdc<D> {
         let mut st0 = unit_byte & 0x07;
         let mut st1 = 0;
         let (mut c, mut h, mut r, mut n) = (self.cylinders[self.unit], (unit_byte >> 2) & 1, 0, 0);
+        let mut wait = 0;
         if !self.ready(unit_byte) {
             st0 |= 0x48;
         } else {
@@ -734,8 +1144,13 @@ impl<D: DiskMedium> Fdc<D> {
             if count == 0 {
                 st0 |= 0x40;
                 st1 |= 0x01; // missing address mark
+                wait = self.bytes_until(0) + REVOLUTION_BYTES;
             } else {
                 let mut idx = self.current_sector;
+                if self.timing.is_some() {
+                    idx = self.next_sector_index(count);
+                    wait = self.bytes_until(Self::id_start(count, idx)) + ID_FIELD_BYTES;
+                }
                 if idx >= count {
                     idx = 0;
                 }
@@ -751,10 +1166,14 @@ impl<D: DiskMedium> Fdc<D> {
                 self.current_sector = idx + 1;
             }
         }
-        self.phase = Phase::Result {
-            bytes: vec![st0, st1, 0, c, h, r, n],
-            pos: 0,
-        };
+        self.after(
+            wait,
+            EXM | CB,
+            Phase::Result {
+                bytes: vec![st0, st1, 0, c, h, r, n],
+                pos: 0,
+            },
+        );
     }
 
     // ---- data transfer commands ----------------------------------------
@@ -813,6 +1232,9 @@ impl<D: DiskMedium> Fdc<D> {
         match kind {
             Kind::ReadData | Kind::ReadDeleted => self.start_read_sector(a),
             Kind::WriteData | Kind::WriteDeleted => self.start_write_sector(a),
+            Kind::ScanEqual | Kind::ScanLowOrEqual | Kind::ScanHighOrEqual => {
+                self.start_write_sector(a)
+            }
             Kind::ReadTrack => self.start_read_track(a),
             Kind::Format => unreachable!("format uses begin_format"),
         }
@@ -838,6 +1260,9 @@ impl<D: DiskMedium> Fdc<D> {
             .map_or(0, |d| d.sector_count(self.cylinders[self.unit], a.side));
         if count == 0 {
             return None;
+        }
+        if self.timing.is_some() {
+            self.current_sector = self.next_sector_index(count);
         }
         let want = SectorId {
             cylinder: a.c,
@@ -878,12 +1303,34 @@ impl<D: DiskMedium> Fdc<D> {
         found
     }
 
+    /// The result phase of a command that searched the disk for a sector and
+    /// did not find it: two index holes later.
+    fn finish_not_found(&mut self, a: &Active) {
+        let wait = self.bytes_until(0) + REVOLUTION_BYTES;
+        self.after(
+            wait,
+            CB,
+            Phase::Result {
+                bytes: a.result_bytes(),
+                pos: 0,
+            },
+        );
+    }
+
+    /// Byte times until the data of the `idx`th sector of the current track.
+    fn wait_for_data(&self, a: &Active, idx: usize) -> u64 {
+        let count = self.disks[self.unit]
+            .as_ref()
+            .map_or(1, |d| d.sector_count(self.cylinders[self.unit], a.side));
+        self.bytes_until(Self::id_start(count, idx)) + ID_TO_DATA_BYTES
+    }
+
     fn start_read_sector(&mut self, mut a: Active) {
         loop {
             let Some((idx, info)) = self.find_sector(&mut a) else {
                 a.st0 |= 0x40;
                 a.st1 |= 0x04; // no data
-                self.finish(&a);
+                self.finish_not_found(&a);
                 return;
             };
             a.st1 = info.st1 & 0x25;
@@ -914,14 +1361,20 @@ impl<D: DiskMedium> Fdc<D> {
                 .unwrap_or_default();
             buffer.resize(size, 0);
             a.sector_index = idx;
-            self.phase = Phase::Execution {
-                active: a,
-                dir: Dir::ToCpu,
-                buffer,
-                pos: 0,
-                expected: 0,
-                delay: 1,
-            };
+            let wait = self.wait_for_data(&a, idx);
+            self.after(
+                wait,
+                CB,
+                Phase::Execution {
+                    active: a,
+                    dir: Dir::ToCpu,
+                    buffer,
+                    pos: 0,
+                    expected: 0,
+                    delay: 1,
+                    ready_at: 0,
+                },
+            );
             return;
         }
     }
@@ -935,7 +1388,14 @@ impl<D: DiskMedium> Fdc<D> {
             self.start_read_sector(a);
         } else {
             a.load_status();
-            self.finish(&a);
+            self.after(
+                DATA_CRC_BYTES,
+                EXM | CB,
+                Phase::Result {
+                    bytes: a.result_bytes(),
+                    pos: 0,
+                },
+            );
         }
     }
 
@@ -985,37 +1445,101 @@ impl<D: DiskMedium> Fdc<D> {
             self.finish(&a);
             return;
         }
-        self.phase = Phase::Execution {
-            active: a,
-            dir: Dir::ToCpu,
-            buffer,
-            pos: 0,
-            expected: 0,
-            delay: 1,
-        };
+        let wait = self.bytes_until(0) + INDEX_GAP_BYTES + ID_TO_DATA_BYTES;
+        self.after(
+            wait,
+            CB,
+            Phase::Execution {
+                active: a,
+                dir: Dir::ToCpu,
+                buffer,
+                pos: 0,
+                expected: 0,
+                delay: 1,
+                ready_at: 0,
+            },
+        );
     }
 
     fn start_write_sector(&mut self, mut a: Active) {
         let Some((idx, _info)) = self.find_sector(&mut a) else {
-            a.st0 |= 0x40;
+            // A scan that finds no sector still ends "normally" (`fdctest3`'s "scan equal (sector not found)").
+            if !a.kind.is_scan() {
+                a.st0 |= 0x40;
+            }
             a.st1 |= 0x04;
-            self.finish(&a);
+            self.finish_not_found(&a);
             return;
         };
         a.sector_index = idx;
         let expected = Self::transfer_size(&a);
-        self.phase = Phase::Execution {
-            active: a,
-            dir: Dir::FromCpu,
-            buffer: Vec::with_capacity(expected),
-            pos: 0,
-            expected,
-            delay: 1,
-        };
+        let wait = self.wait_for_data(&a, idx);
+        self.after(
+            wait,
+            CB,
+            Phase::Execution {
+                active: a,
+                dir: Dir::FromCpu,
+                buffer: Vec::with_capacity(expected),
+                pos: 0,
+                expected,
+                delay: 1,
+                ready_at: 0,
+            },
+        );
     }
 
     /// The CPU has supplied a full sector (or the format ID table).
+    /// A scanned sector's bytes are in: compare, then end or go on to the next
+    /// sector `STP` (the DTL byte) further. Only a CPU byte of `&FF` is "don't
+    /// care"; satisfied ends the command with ST2 SH (`&08`) if every byte was
+    /// equal, unsatisfied at EOT with ST2 SN (`&04`); ST0 reports a normal end
+    /// either way (`fdctest3`'s Scan cases).
+    fn finish_scan(&mut self, mut a: Active, cpu: Vec<u8>) {
+        let sector = self.disks[self.unit]
+            .as_ref()
+            .and_then(|d| d.sector_data(self.cylinders[self.unit], a.side, a.sector_index, 0))
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
+        self.current_sector = a.sector_index + 1;
+        let mut equal = true;
+        let mut satisfied = true;
+        for (i, &want) in cpu.iter().enumerate() {
+            if want == 0xFF {
+                continue;
+            }
+            let have = sector.get(i).copied().unwrap_or(0);
+            equal &= have == want;
+            satisfied &= match a.kind {
+                Kind::ScanEqual => have == want,
+                Kind::ScanLowOrEqual => have <= want,
+                _ => have >= want,
+            };
+        }
+        if satisfied {
+            a.st2 = (a.st2 & !0x0C) | if equal { 0x08 } else { 0 };
+        } else if a.r != a.eot {
+            a.r = a.r.wrapping_add(a.dtl.max(1));
+            self.start_write_sector(a);
+            return;
+        } else {
+            a.st2 = (a.st2 & !0x0C) | 0x04;
+        }
+        self.after(
+            DATA_CRC_BYTES,
+            EXM | CB,
+            Phase::Result {
+                bytes: a.result_bytes(),
+                pos: 0,
+            },
+        );
+    }
+
     fn finish_write_transfer(&mut self, mut a: Active, buffer: Vec<u8>) {
+        if a.kind.is_scan() {
+            self.finish_scan(a, buffer);
+            return;
+        }
         if a.kind == Kind::Format {
             self.finish_format(a, &buffer);
             return;
@@ -1043,7 +1567,14 @@ impl<D: DiskMedium> Fdc<D> {
         } else {
             a.st0 |= 0x40;
             a.st1 |= 0x80;
-            self.finish(&a);
+            self.after(
+                DATA_CRC_BYTES,
+                EXM | CB,
+                Phase::Result {
+                    bytes: a.result_bytes(),
+                    pos: 0,
+                },
+            );
         }
     }
 
@@ -1089,14 +1620,21 @@ impl<D: DiskMedium> Fdc<D> {
             self.finish_format(a, &[]);
             return;
         }
-        self.phase = Phase::Execution {
-            active: a,
-            dir: Dir::FromCpu,
-            buffer: Vec::with_capacity(expected),
-            pos: 0,
-            expected,
-            delay: 1,
-        };
+        // From the index hole: the first ID's bytes are asked for after the index gap.
+        let wait = self.bytes_until(0) + INDEX_GAP_BYTES;
+        self.after(
+            wait,
+            EXM | CB,
+            Phase::Execution {
+                active: a,
+                dir: Dir::FromCpu,
+                buffer: Vec::with_capacity(expected),
+                pos: 0,
+                expected,
+                delay: 1,
+                ready_at: 0,
+            },
+        );
     }
 
     fn finish_format(&mut self, mut a: Active, id_bytes: &[u8]) {
@@ -1126,10 +1664,17 @@ impl<D: DiskMedium> Fdc<D> {
     }
 
     fn finish_format_result(&mut self, a: &Active, chrn: [u8; 4]) {
-        self.phase = Phase::Result {
+        let result = Phase::Result {
             bytes: vec![a.st0, a.st1, a.st2, chrn[0], chrn[1], chrn[2], chrn[3]],
             pos: 0,
         };
+        // A format ends at the next index hole (not at once when it was refused).
+        if a.st0 & 0xC0 == 0 {
+            let wait = self.bytes_until(0);
+            self.after(wait, EXM | CB, result);
+        } else {
+            self.phase = result;
+        }
     }
 }
 

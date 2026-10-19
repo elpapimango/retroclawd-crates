@@ -129,10 +129,26 @@ impl DiskMedium for TestDisk {
     }
 }
 
+/// A controller with `disk` in drive 0 and the ready-change interrupts that
+/// inserting it raised already reported (as firmware does at start-up).
 fn fdc(disk: TestDisk) -> Fdc<TestDisk> {
     let mut f = Fdc::new();
     f.insert_disk(disk);
+    drain_interrupts(&mut f);
     f
+}
+
+/// Sense Interrupt Status until it answers "invalid"; returns what it reported.
+fn drain_interrupts(f: &mut Fdc<TestDisk>) -> Vec<Vec<u8>> {
+    let mut seen = Vec::new();
+    loop {
+        f.write_data(0x08);
+        let r = results(f);
+        if r == [0x80] {
+            return seen;
+        }
+        seen.push(r);
+    }
 }
 
 fn send(f: &mut Fdc<TestDisk>, bytes: &[u8]) {
@@ -226,11 +242,43 @@ fn unknown_command_gives_a_single_invalid_result_byte() {
     assert_eq!(f.read_msr(), 0x80);
 }
 
+/// Scan Equal / Low or Equal / High or Equal on sector C1 (512 x `0x11`): a CPU `&FF` is "don't care", a hit ends
+/// with ST2 SH when every byte matched, a miss at EOT with ST2 SN; ST0 reports a normal end (`fdctest3`).
 #[test]
-fn scan_commands_are_reported_invalid() {
-    let mut f = fdc(one_track_disk());
-    f.write_data(0x51);
-    assert_eq!(f.read_data(), 0x80);
+fn scan_commands_compare_the_cpu_bytes_with_the_sector() {
+    let scan = |opcode: u8, cpu: &[u8]| -> Vec<u8> {
+        let mut f = fdc(one_track_disk());
+        send(&mut f, &[opcode, 0, 0, 0, 0xC1, 2, 0xC1, 0x2A, 1]);
+        for i in 0..512 {
+            f.write_data(cpu[i % cpu.len()]);
+        }
+        results(&mut f)
+    };
+    assert_eq!(
+        scan(0x51, &[0x11]),
+        [0, 0, 0x08, 0, 0, 0xC1, 2],
+        "equal: hit"
+    );
+    assert_eq!(
+        scan(0x51, &[0xFF]),
+        [0, 0, 0x08, 0, 0, 0xC1, 2],
+        "CPU FF: don't care"
+    );
+    assert_eq!(
+        scan(0x51, &[0x12]),
+        [0, 0, 0x04, 0, 0, 0xC1, 2],
+        "not equal: SN"
+    );
+    assert_eq!(
+        scan(0x59, &[0x12]),
+        [0, 0, 0x00, 0, 0, 0xC1, 2],
+        "low or equal: lower"
+    );
+    assert_eq!(
+        scan(0x5D, &[0x12]),
+        [0, 0, 0x04, 0, 0, 0xC1, 2],
+        "high or equal: not higher"
+    );
 }
 
 // ---- Specify / Seek / Recalibrate / Sense Interrupt --------------------
@@ -901,13 +949,21 @@ fn two_drives_are_independent() {
     each_drive_keeps_its_own_head_position();
 }
 
-fn an_empty_second_drive_and_units_2_and_3_are_not_ready() {
+fn an_empty_second_drive_is_not_ready_and_units_2_and_3_are_drives_0_and_1() {
     let mut f = fdc(one_track_disk());
-    for unit in [1, 2, 3] {
+    for unit in [1, 3] {
         send(&mut f, &read_cmd(unit, 0, 0, 0xC1, 2, 0xC1));
         let r = results(&mut f);
         assert_eq!(r[0] & 0xC8, 0x48, "unit {unit} not ready: {r:02X?}");
     }
+    // Only US0 is wired: unit 2 is drive 0.
+    send(&mut f, &read_cmd(2, 0, 0, 0xC1, 2, 0xC1));
+    assert_eq!(drain_execution(&mut f), vec![0x11; 512]);
+    assert_eq!(
+        results(&mut f)[0] & 0x07,
+        2,
+        "ST0 names the unit as addressed"
+    );
     // Drive A is still fine afterwards.
     send(&mut f, &read_cmd(0, 0, 0, 0xC1, 2, 0xC1));
     assert_eq!(drain_execution(&mut f), vec![0x11; 512]);
@@ -936,7 +992,7 @@ fn ejecting_one_drive_leaves_the_other_and_the_old_api_means_drive_a() {
 /// Merged (every check kept): `an_empty_second_drive_and_units_2_and_3_are_not_ready`, `ejecting_one_drive_leaves_the_other_and_the_old_api_means_drive_a`.
 #[test]
 fn second_drive_edge_cases() {
-    an_empty_second_drive_and_units_2_and_3_are_not_ready();
+    an_empty_second_drive_is_not_ready_and_units_2_and_3_are_drives_0_and_1();
     ejecting_one_drive_leaves_the_other_and_the_old_api_means_drive_a();
 }
 
@@ -964,4 +1020,29 @@ fn state_round_trip_cases() {
     state_round_trips_a_write_in_the_middle_of_its_data_phase();
     state_round_trips_a_pending_seek_and_motor();
     the_state_carries_both_head_positions();
+}
+
+/// A drive's ready line changing (motor, disk) raises an interrupt per polled unit: ST0 `&C0` + unit, `&08` more
+/// when it became not ready, then the cylinder (Kevin Thacker's `fdc_gen` "motor on (wait), sense int, motor off
+/// (wait), sense int").
+#[test]
+fn a_ready_change_raises_an_interrupt_for_each_unit_of_the_drive() {
+    let mut f = fdc(one_track_disk());
+    send(&mut f, &[0x0F, 0x00, 13]);
+    f.write_data(0x08);
+    assert_eq!(results(&mut f), vec![0x20, 13], "the seek end comes first");
+    f.set_motor(false);
+    assert_eq!(
+        drain_interrupts(&mut f),
+        vec![vec![0xC8, 13], vec![0xCA, 0]],
+        "unit 2 keeps its own PCN"
+    );
+    f.set_motor(true);
+    assert_eq!(
+        drain_interrupts(&mut f),
+        vec![vec![0xC0, 13], vec![0xC2, 0]]
+    );
+    // No change, no interrupt.
+    f.set_motor(true);
+    assert!(drain_interrupts(&mut f).is_empty());
 }

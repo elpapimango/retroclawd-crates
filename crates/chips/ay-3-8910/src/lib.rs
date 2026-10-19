@@ -463,7 +463,11 @@ mod tests {
         assert_eq!(ay.read(), 0xFF);
         ay.select_register(0);
         assert!(ay.register_valid());
-        assert_eq!(ay.read(), 0x33, "the write while nothing was selected changed nothing");
+        assert_eq!(
+            ay.read(),
+            0x33,
+            "the write while nothing was selected changed nothing"
+        );
         ay.select_register(7);
         ay.write(0xC1);
         assert_eq!(ay.read(), 0xC1);
@@ -471,7 +475,6 @@ mod tests {
         ay.write(0x3F);
         assert!(!ay.io_port_output(0));
     }
-
 
     fn write_reg(ay: &mut Ay3_8910, reg: u8, value: u8) {
         ay.select_register(reg);
