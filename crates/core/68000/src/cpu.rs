@@ -304,6 +304,16 @@ impl Cpu {
             Op::Not(sz) => self.op_not(bus, opcode, sz),
             Op::Shift(kind, sz) => self.op_shift(bus, opcode, kind, sz),
             Op::ShiftMem(kind) => self.op_shift_mem(bus, opcode, kind),
+            Op::Bcc => self.op_bcc(bus, opcode),
+            Op::Dbcc => self.op_dbcc(bus, opcode),
+            Op::Scc => self.op_scc(bus, opcode),
+            Op::Jmp => self.op_jmp(bus, opcode),
+            Op::Jsr => self.op_jsr(bus, opcode),
+            Op::Rts => self.op_rts(bus),
+            Op::Rtr => self.op_rtr(bus),
+            Op::Rte => self.op_rte(bus),
+            Op::Link => self.op_link(bus, opcode),
+            Op::Unlk => self.op_unlk(bus, opcode),
             // Exception processing arrives with the exception work.
             Op::Illegal => self.prefetch_next(bus),
         }

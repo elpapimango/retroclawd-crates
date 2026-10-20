@@ -95,6 +95,16 @@ pub(crate) enum Op {
     Not(Sz),
     Shift(Shift, Sz),
     ShiftMem(Shift),
+    Bcc,
+    Dbcc,
+    Scc,
+    Jmp,
+    Jsr,
+    Rts,
+    Rtr,
+    Rte,
+    Link,
+    Unlk,
 }
 
 /// A set of effective-address modes, one bit per mode in `EaSet::*` order.
@@ -760,6 +770,16 @@ pub static OPCODES: &[OpPattern] = &[
         N,
         Op::ShiftMem(Shift::Ro),
     ),
+    p(0xF000, 0x6000, "bcc", N, N, Op::Bcc),
+    p(0xF0F8, 0x50C8, "dbcc", N, N, Op::Dbcc),
+    p(0xF0C0, 0x50C0, "scc", EaSet::DATA_ALT, N, Op::Scc),
+    p(0xFFC0, 0x4EC0, "jmp", EaSet::CONTROL, N, Op::Jmp),
+    p(0xFFC0, 0x4E80, "jsr", EaSet::CONTROL, N, Op::Jsr),
+    p(0xFFFF, 0x4E75, "rts", N, N, Op::Rts),
+    p(0xFFFF, 0x4E77, "rtr", N, N, Op::Rtr),
+    p(0xFFFF, 0x4E73, "rte", N, N, Op::Rte),
+    p(0xFFF8, 0x4E50, "link", N, N, Op::Link),
+    p(0xFFF8, 0x4E58, "unlk", N, N, Op::Unlk),
     p(0xF1C0, 0xB0C0, "cmpa.w", EaSet::ALL, N, Op::Cmpa(Sz::W)),
     p(0xF1C0, 0xB1C0, "cmpa.l", EaSet::ALL, N, Op::Cmpa(Sz::L)),
 ];
