@@ -9,3 +9,7 @@ description = "Motorola MC68000 CPU core: instruction set, exceptions, a functio
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
+flate2 = "1"

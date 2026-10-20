@@ -1,0 +1,333 @@
+//! SingleStepTests/680x0 (https://github.com/SingleStepTests/680x0, commit e0d5ece, `68000/v1`): about 8 000
+//! randomly generated single-instruction tests per file, each with the full CPU state, the RAM it touches, the
+//! two-word prefetch queue, the total clock count and every bus transaction, before and after.
+//!
+//! The files are not committed (the repository states no licence): `scripts/fetch_singlesteptests.sh` downloads them
+//! into `tests/sst/`; without them every test here prints a note and passes. `RC_SST_DIR` points elsewhere,
+//! `RC_SST_BUS=1` also compares the bus transactions, `RC_SST_PRINT=1` prints every failure as a baseline line.
+//! A failure listed in `sst_baseline.txt` (`<test name><TAB><reason>`) is allowed; any other one fails the test.
+
+use flate2::read::GzDecoder;
+use mc68000::{BusFault, Cpu, FunctionCode, IackResponse, M68kBus, Size};
+use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+
+#[derive(Deserialize)]
+struct State {
+    d0: u32,
+    d1: u32,
+    d2: u32,
+    d3: u32,
+    d4: u32,
+    d5: u32,
+    d6: u32,
+    d7: u32,
+    a0: u32,
+    a1: u32,
+    a2: u32,
+    a3: u32,
+    a4: u32,
+    a5: u32,
+    a6: u32,
+    usp: u32,
+    ssp: u32,
+    sr: u16,
+    pc: u32,
+    prefetch: [u16; 2],
+    ram: Vec<(u32, u8)>,
+}
+
+impl State {
+    fn d(&self) -> [u32; 8] {
+        [
+            self.d0, self.d1, self.d2, self.d3, self.d4, self.d5, self.d6, self.d7,
+        ]
+    }
+    fn a(&self) -> [u32; 7] {
+        [
+            self.a0, self.a1, self.a2, self.a3, self.a4, self.a5, self.a6,
+        ]
+    }
+}
+
+#[derive(Deserialize)]
+struct Case {
+    name: String,
+    initial: State,
+    #[serde(rename = "final")]
+    expected: State,
+    length: u32,
+    transactions: Vec<serde_json::Value>,
+}
+
+/// One recorded bus event, in the test files' notation.
+#[derive(Debug, PartialEq)]
+enum Event {
+    Idle(u32),
+    Access {
+        write: bool,
+        fc: u8,
+        addr: u32,
+        word: bool,
+        value: u32,
+    },
+}
+
+#[derive(Default)]
+struct TestBus {
+    ram: HashMap<u32, u8>,
+    events: Vec<Event>,
+}
+
+impl TestBus {
+    fn byte(&self, addr: u32) -> u8 {
+        self.ram.get(&(addr & 0xFF_FFFF)).copied().unwrap_or(0)
+    }
+}
+
+impl M68kBus for TestBus {
+    fn read(&mut self, addr: u32, size: Size, fc: FunctionCode) -> Result<u32, BusFault> {
+        let value = match size {
+            Size::Byte => self.byte(addr) as u32,
+            Size::Word => u16::from_be_bytes([self.byte(addr), self.byte(addr + 1)]) as u32,
+        };
+        self.events.push(Event::Access {
+            write: false,
+            fc: fc.0,
+            addr,
+            word: size == Size::Word,
+            value,
+        });
+        Ok(value)
+    }
+
+    fn write(
+        &mut self,
+        addr: u32,
+        size: Size,
+        value: u32,
+        fc: FunctionCode,
+    ) -> Result<(), BusFault> {
+        match size {
+            Size::Byte => {
+                self.ram.insert(addr, value as u8);
+            }
+            Size::Word => {
+                let [hi, lo] = (value as u16).to_be_bytes();
+                self.ram.insert(addr, hi);
+                self.ram.insert((addr + 1) & 0xFF_FFFF, lo);
+            }
+        }
+        let value = if size == Size::Byte {
+            value & 0xFF
+        } else {
+            value & 0xFFFF
+        };
+        self.events.push(Event::Access {
+            write: true,
+            fc: fc.0,
+            addr,
+            word: size == Size::Word,
+            value,
+        });
+        Ok(())
+    }
+
+    fn iack(&mut self, _level: u8) -> IackResponse {
+        IackResponse::Autovector
+    }
+
+    fn sync(&mut self, clocks: u32) {
+        match self.events.last_mut() {
+            Some(Event::Idle(n)) => *n += clocks,
+            _ => self.events.push(Event::Idle(clocks)),
+        }
+    }
+}
+
+/// The test file's transactions as events: `["n", clocks]` and `[kind, len, fc, addr, ".b"/".w", value]`, a TAS
+/// (`"t"`) being its byte read followed by its byte write.
+fn expected_events(case: &Case) -> Vec<Event> {
+    let mut out = Vec::new();
+    for t in &case.transactions {
+        let kind = t[0].as_str().unwrap_or("");
+        if kind == "n" {
+            match out.last_mut() {
+                Some(Event::Idle(n)) => *n += t[1].as_u64().unwrap_or(0) as u32,
+                _ => out.push(Event::Idle(t[1].as_u64().unwrap_or(0) as u32)),
+            }
+            continue;
+        }
+        let fc = t[2].as_u64().unwrap_or(0) as u8;
+        let addr = t[3].as_u64().unwrap_or(0) as u32;
+        let word = t[4].as_str() == Some(".w");
+        let value = t[5].as_u64().unwrap_or(0) as u32;
+        if kind == "t" {
+            let before = case
+                .initial
+                .ram
+                .iter()
+                .find(|(a, _)| *a == addr)
+                .map_or(0, |(_, v)| *v as u32);
+            out.push(Event::Access {
+                write: false,
+                fc,
+                addr,
+                word: false,
+                value: before,
+            });
+            out.push(Event::Access {
+                write: true,
+                fc,
+                addr,
+                word: false,
+                value,
+            });
+        } else {
+            out.push(Event::Access {
+                write: kind == "w",
+                fc,
+                addr,
+                word,
+                value,
+            });
+        }
+    }
+    out
+}
+
+/// Runs one case; `Err` names the first mismatch.
+fn run(case: &Case, compare_bus: bool) -> Result<(), String> {
+    let init = &case.initial;
+    let mut bus = TestBus::default();
+    for &(addr, value) in &init.ram {
+        bus.ram.insert(addr, value);
+    }
+    let mut cpu = Cpu::new();
+    cpu.d = init.d();
+    cpu.a = init.a();
+    cpu.usp = init.usp;
+    cpu.ssp = init.ssp;
+    cpu.set_sr(init.sr);
+    cpu.pc = init.pc;
+    cpu.set_prefetch(init.prefetch);
+    let clocks = cpu.step(&mut bus);
+
+    let fin = &case.expected;
+    let mut diffs = Vec::new();
+    let regs = |label: &str, got: &[u32], want: &[u32], diffs: &mut Vec<String>| {
+        for (i, (g, w)) in got.iter().zip(want).enumerate() {
+            if g != w {
+                diffs.push(format!("{label}{i} {g:08X} want {w:08X}"));
+            }
+        }
+    };
+    regs("d", &cpu.d, &fin.d(), &mut diffs);
+    regs("a", &cpu.a, &fin.a(), &mut diffs);
+    regs("usp", &[cpu.usp], &[fin.usp], &mut diffs);
+    regs("ssp", &[cpu.ssp], &[fin.ssp], &mut diffs);
+    if cpu.sr() != fin.sr {
+        diffs.push(format!("sr {:04X} want {:04X}", cpu.sr(), fin.sr));
+    }
+    if cpu.pc != fin.pc {
+        diffs.push(format!("pc {:06X} want {:06X}", cpu.pc, fin.pc));
+    }
+    if cpu.prefetch() != fin.prefetch {
+        diffs.push(format!(
+            "prefetch {:04X?} want {:04X?}",
+            cpu.prefetch(),
+            fin.prefetch
+        ));
+    }
+    for &(addr, want) in &fin.ram {
+        let got = bus.byte(addr);
+        if got != want {
+            diffs.push(format!("ram[{addr:06X}] {got:02X} want {want:02X}"));
+        }
+    }
+    if clocks != case.length {
+        diffs.push(format!("clocks {clocks} want {}", case.length));
+    }
+    if compare_bus && diffs.is_empty() {
+        let want = expected_events(case);
+        if bus.events != want {
+            diffs.push(format!("bus {:?}\n      want {:?}", bus.events, want));
+        }
+    }
+    if diffs.is_empty() {
+        Ok(())
+    } else {
+        Err(diffs.join(", "))
+    }
+}
+
+fn dir() -> PathBuf {
+    std::env::var_os("RC_SST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/sst"))
+}
+
+fn baseline() -> HashSet<String> {
+    let text = include_str!("sst_baseline.txt");
+    text.lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+        .map(|l| l.split('\t').next().unwrap_or("").to_string())
+        .collect()
+}
+
+fn run_file(file: &str) {
+    let path = dir().join(format!("{file}.json.gz"));
+    let Ok(f) = std::fs::File::open(&path) else {
+        eprintln!(
+            "SingleStepTests not fetched ({}): run scripts/fetch_singlesteptests.sh",
+            path.display()
+        );
+        return;
+    };
+    let cases: Vec<Case> = serde_json::from_reader(GzDecoder::new(f)).expect("parse test file");
+    let compare_bus = std::env::var_os("RC_SST_BUS").is_some();
+    let print = std::env::var_os("RC_SST_PRINT").is_some();
+    let allowed = baseline();
+    let started = std::time::Instant::now();
+    let mut unexpected = Vec::new();
+    let mut failed = 0;
+    for case in &cases {
+        if let Err(diff) = run(case, compare_bus) {
+            failed += 1;
+            if print {
+                println!("{}\t{}", case.name, diff);
+            }
+            if !allowed.contains(&case.name) {
+                unexpected.push(format!("{}: {}", case.name, diff));
+            }
+        }
+    }
+    let per_sec = cases.len() as f64 / started.elapsed().as_secs_f64().max(1e-9);
+    eprintln!(
+        "{file}: {} of {} pass ({per_sec:.0} cases/s)",
+        cases.len() - failed,
+        cases.len()
+    );
+    assert!(
+        unexpected.is_empty(),
+        "{file}: {} unexpected failures, first:\n  {}",
+        unexpected.len(),
+        unexpected
+            .iter()
+            .take(10)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}
+
+macro_rules! sst {
+    ($($name:ident => $file:literal),* $(,)?) => {
+        $(#[test] fn $name() { run_file($file); })*
+    };
+}
+
+sst! {
+    nop => "NOP",
+}

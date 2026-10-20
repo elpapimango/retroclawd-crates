@@ -258,6 +258,48 @@ impl Cpu {
         self.fill_prefetch(bus)
     }
 
+    /// Executes one instruction (or, when stopped or halted, lets 4 clocks pass). Returns the clocks it took.
+    pub fn step<B: M68kBus>(&mut self, bus: &mut B) -> u32 {
+        self.clocks = 0;
+        if self.run != RunState::Running {
+            self.idle(4);
+        } else {
+            let opcode = self.prefetch[0];
+            if let Err(_fault) = self.execute(bus, opcode) {
+                // Group 0 exception processing arrives with the exception work.
+            }
+        }
+        self.flush_sync(bus);
+        self.clocks
+    }
+
+    fn execute<B: M68kBus>(&mut self, bus: &mut B, opcode: u16) -> Result<(), Fault> {
+        match opcode {
+            0x4E71 => self.prefetch_next(bus),
+            _ => self.prefetch_next(bus),
+        }
+    }
+
+    /// The fetch that ends an instruction: the queue moves up one word and the word after it is read.
+    pub(crate) fn prefetch_next<B: M68kBus>(&mut self, bus: &mut B) -> Result<(), Fault> {
+        self.pc = self.pc.wrapping_add(2);
+        self.prefetch[0] = self.prefetch[1];
+        let fc = self.program_fc();
+        self.prefetch[1] =
+            self.bus_read(bus, self.pc.wrapping_add(2), Size::Word, fc, true)? as u16;
+        Ok(())
+    }
+
+    /// Takes the extension word at the head of the queue and refills it.
+    pub(crate) fn extension<B: M68kBus>(&mut self, bus: &mut B) -> Result<u16, Fault> {
+        let word = self.prefetch[1];
+        self.pc = self.pc.wrapping_add(2);
+        let fc = self.program_fc();
+        self.prefetch[1] =
+            self.bus_read(bus, self.pc.wrapping_add(2), Size::Word, fc, true)? as u16;
+        Ok(word)
+    }
+
     /// Reloads both prefetch words from `pc` (after a jump or an exception).
     pub(crate) fn fill_prefetch<B: M68kBus>(&mut self, bus: &mut B) -> Result<(), Fault> {
         let fc = self.program_fc();
