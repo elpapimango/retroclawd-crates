@@ -1,6 +1,7 @@
 pub mod abi;
 pub mod codec;
 pub mod compat;
+pub mod execution_mode;
 pub mod guard;
 pub mod protocol;
 
@@ -9,6 +10,7 @@ pub use abi::{
     PluginEntryV1, PluginKind, RcBuffer, RcCallResult, RcMutSlice, RcSlice, RcStatus, StatusCode,
 };
 pub use codec::{CodecError, decode, decode_message, encode, encode_message};
+pub use execution_mode::ExecutionMode;
 pub use protocol::{
     AddressSpaceInfo, BinaryBlob, BitmapExplorerDefaults, BitmapPaletteColor, CartridgeStatus,
     ChipSnapshot, CpuFamily, CpuInfo, DebugCommand, DebugResponse, DebugValue, DisassemblyLine,

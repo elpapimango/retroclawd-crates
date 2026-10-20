@@ -41,6 +41,25 @@ Z80 instruction accuracy: `cargo run --release -p z80 --example zexall -- zexall
 A change to `plugin-api` that alters the wire schema fails `tests/protocol_schema.rs` until
 `PROTOCOL_VERSION` is bumped and the new fingerprint recorded.
 
+## Execution modes
+
+`plugin_api::ExecutionMode` defines the common `execution_mode` Option
+(`--execution-mode fast|accurate`). Fast is the default policy. A Plugin declares
+this Option only after connecting both policies to documented hardware behavior;
+the helper does not change pacing, select a CPU engine, or promise cycle accuracy.
+
+Use `ExecutionMode::option(description)` in the Machine profile and
+`ExecutionMode::from_options(&request.options)` at creation. The latter returns
+`None` when no selection was supplied. Resolve any legacy timing Option first,
+reject contradictory explicit selections, then use `unwrap_or_default()`.
+The Option deliberately has no wire default, so an implicit `fast` does not
+override an explicit legacy selection. Existing Host configuration precedence
+applies independently to each Option key.
+
+The helper adds no wire fields and requires no ABI or protocol version change.
+Save states must preserve the selected hardware engine whenever restoration
+depends on it; the common name alone is not a replacement for that state.
+
 ## License
 
 Free software under the **GNU General Public License v3.0 or later** (see `LICENSE`). The vendored test programs under
