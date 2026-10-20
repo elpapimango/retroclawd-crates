@@ -180,8 +180,10 @@ impl Cpu {
         } else {
             // UM Table 8-11: 18 (byte, word) / 30 (long) clocks; the two predecrements share 2 internal clocks.
             self.idle(2);
+            self.check_predec_long(ry, sz)?;
             let src = self.ea(bus, 4, ry as u16, sz, true)?;
             let s = self.read_loc(bus, src, sz)?;
+            self.check_predec_long(rx, sz)?;
             let dst = self.ea(bus, 4, rx as u16, sz, true)?;
             let d = self.read_loc(bus, dst, sz)?;
             let v = match alu {
@@ -191,6 +193,23 @@ impl Cpu {
             self.prefetch_next(bus)?;
             self.write_loc(bus, dst, sz, v)
         }
+    }
+
+    /// ADDX/SUBX `-(An)` on a long read the low word first: at an odd address the fault comes after An has moved
+    /// by 2 only, at that word (SingleStepTests).
+    fn check_predec_long(&mut self, r: usize, sz: Sz) -> Result<(), Fault> {
+        let low = self.an(r).wrapping_sub(2);
+        if sz == Sz::L && low & 1 != 0 {
+            self.set_an(r, low);
+            let fc = self.data_fc();
+            return Err(Fault::Address {
+                addr: low,
+                write: false,
+                fc,
+                instruction: false,
+            });
+        }
+        Ok(())
     }
 
     /// The immediate operand of an `xxxI` instruction, which precedes the effective address's extension words.

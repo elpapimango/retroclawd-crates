@@ -25,10 +25,58 @@ impl Cpu {
         let (m, r) = src_field(op);
         let src = self.ea(bus, m, r, sz, false)?;
         let v = self.read_loc(bus, src, sz)?;
-        let dst = self.ea(bus, (op >> 6) & 7, (op >> 9) & 7, sz, true)?;
+        let (dm, dr) = ((op >> 6) & 7, (op >> 9) & 7);
         self.set_logic_flags(v, sz);
-        self.write_loc(bus, dst, sz, v)?;
-        self.prefetch_next(bus)
+        // The destination's bus order around a fault, as SingleStepTests records it.
+        match (dm, dr) {
+            // (An)+: An moves only after the write succeeds.
+            (3, _) => {
+                let a = self.an(dr as usize);
+                self.write_mem(bus, a, sz, v)?;
+                let step = if sz == Sz::B && dr == 7 {
+                    2
+                } else {
+                    sz.bytes()
+                };
+                self.set_an(dr as usize, a.wrapping_add(step));
+                self.prefetch_next(bus)
+            }
+            // -(An): the next word is prefetched first; a long then writes its low word, then the high one.
+            (4, _) if sz != Sz::L => {
+                let step = if sz == Sz::B && dr == 7 {
+                    2
+                } else {
+                    sz.bytes()
+                };
+                let addr = self.an(dr as usize).wrapping_sub(step);
+                self.prefetch_next(bus)?;
+                self.set_an(dr as usize, addr);
+                self.write_mem(bus, addr, sz, v)
+            }
+            (4, _) => {
+                let addr = self.an(dr as usize).wrapping_sub(4);
+                self.prefetch_next(bus)?;
+                self.set_an(dr as usize, addr.wrapping_add(2));
+                self.write_mem(bus, addr.wrapping_add(2), Sz::W, v & 0xFFFF)?;
+                self.write_mem(bus, addr, Sz::W, v >> 16)?;
+                self.set_an(dr as usize, addr);
+                Ok(())
+            }
+            // (xxx).L after a memory source (not immediate): the low address word is used from the queue and the queue refilled
+            // after the write.
+            (7, 1) if m >= 2 && !(m == 7 && r == 4) => {
+                let hi = self.extension(bus)? as u32;
+                let addr = hi << 16 | self.prefetch[1] as u32;
+                self.write_mem(bus, addr, sz, v)?;
+                self.extension(bus)?;
+                self.prefetch_next(bus)
+            }
+            _ => {
+                let dst = self.ea(bus, dm, dr, sz, true)?;
+                self.write_loc(bus, dst, sz, v)?;
+                self.prefetch_next(bus)
+            }
+        }
     }
 
     pub(crate) fn op_movea<B: M68kBus>(

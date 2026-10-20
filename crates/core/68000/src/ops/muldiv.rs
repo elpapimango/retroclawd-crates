@@ -101,8 +101,10 @@ impl Cpu {
         let dn = ((op >> 9) & 7) as usize;
         let dividend = self.d[dn];
         if s == 0 {
-            self.idle(4);
-            return Err(Fault::Exception(VECTOR_ZERO_DIVIDE));
+            // SingleStepTests (one case, DIVU (d16,A7)): N, Z, V, C cleared and the stacked PC two bytes before
+            // the PC register; UM 6.3.5 says the next instruction. The data is followed.
+            self.set_sr(self.sr() & 0xFFF0);
+            return Err(self.raise(VECTOR_ZERO_DIVIDE, self.pc.wrapping_sub(2), 8));
         }
         let ccr_x = self.sr() & 0x10;
         let result = if signed {

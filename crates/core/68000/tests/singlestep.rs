@@ -262,29 +262,6 @@ fn run(case: &Case, compare_bus: bool) -> Result<(), String> {
     }
 }
 
-/// Until exception processing exists (plan Task 9), a case whose expected outcome is an exception is counted
-/// apart instead of failing: its final PC is a vector the test placed in RAM (vectors 2-47).
-const DEFER_EXCEPTIONS: bool = true;
-
-fn takes_exception(case: &Case) -> bool {
-    let byte = |a: u32| {
-        case.initial
-            .ram
-            .iter()
-            .find(|(x, _)| *x == a)
-            .map(|(_, v)| *v as u32)
-    };
-    (2..48u32).any(|v| {
-        let a = v * 4;
-        match (byte(a), byte(a + 1), byte(a + 2), byte(a + 3)) {
-            (Some(b0), Some(b1), Some(b2), Some(b3)) => {
-                (b0 << 24 | b1 << 16 | b2 << 8 | b3) & 0xFF_FFFF == case.expected.pc
-            }
-            _ => false,
-        }
-    })
-}
-
 /// Known disagreements between the test data and the Programmer's Reference Manual, kept to the manual's
 /// behaviour. Each returns true when `diff` is exactly that disagreement for `case`.
 ///
@@ -336,12 +313,7 @@ fn run_file(file: &str) {
     let started = std::time::Instant::now();
     let mut unexpected = Vec::new();
     let mut failed = 0;
-    let mut deferred = 0;
     for case in &cases {
-        if DEFER_EXCEPTIONS && takes_exception(case) {
-            deferred += 1;
-            continue;
-        }
         if let Err(diff) = run(case, compare_bus) {
             failed += 1;
             if print {
@@ -354,8 +326,8 @@ fn run_file(file: &str) {
     }
     let per_sec = cases.len() as f64 / started.elapsed().as_secs_f64().max(1e-9);
     eprintln!(
-        "{file}: {} of {} pass, {deferred} exception cases deferred ({per_sec:.0} cases/s)",
-        cases.len() - failed - deferred,
+        "{file}: {} of {} pass ({per_sec:.0} cases/s)",
+        cases.len() - failed,
         cases.len()
     );
     assert!(

@@ -34,8 +34,23 @@ impl Cpu {
         }
     }
 
+    /// An address error for an odd jump target, raised before the instruction stacks anything.
+    pub(crate) fn check_target(&self, target: u32) -> Result<(), Fault> {
+        if target & 1 == 0 {
+            Ok(())
+        } else {
+            Err(Fault::Address {
+                addr: target,
+                write: false,
+                fc: self.program_fc(),
+                instruction: true,
+            })
+        }
+    }
+
     /// Continues at `target` with an empty prefetch queue.
     pub(crate) fn jump_to<B: M68kBus>(&mut self, bus: &mut B, target: u32) -> Result<(), Fault> {
+        self.check_target(target)?;
         self.pc = target;
         self.fill_prefetch(bus)
     }
@@ -161,6 +176,7 @@ impl Cpu {
 
     pub(crate) fn op_jsr<B: M68kBus>(&mut self, bus: &mut B, op: u16) -> Result<(), Fault> {
         let (target, ret) = self.jump_target(bus, op)?;
+        self.check_target(target)?;
         self.push_long(bus, ret)?;
         self.jump_to(bus, target)
     }

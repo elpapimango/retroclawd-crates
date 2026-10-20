@@ -11,11 +11,11 @@ use crate::ops::move_::src_field;
 pub(crate) const VECTOR_PRIVILEGE: u8 = 8;
 
 impl Cpu {
-    pub(crate) fn require_supervisor(&self) -> Result<(), Fault> {
+    pub(crate) fn require_supervisor(&mut self) -> Result<(), Fault> {
         if self.sr() & SR_S != 0 {
             Ok(())
         } else {
-            Err(Fault::Exception(VECTOR_PRIVILEGE))
+            Err(self.raise(VECTOR_PRIVILEGE, self.instruction_pc, 4))
         }
     }
 
@@ -134,7 +134,13 @@ impl Cpu {
                     self.d[reg]
                 };
                 addr = addr.wrapping_sub(sz.bytes());
-                self.write_mem(bus, addr, sz, v)?;
+                if sz == Sz::L {
+                    // Low word first (SingleStepTests: a fault reports the low word's address).
+                    self.write_mem(bus, addr.wrapping_add(2), Sz::W, v & 0xFFFF)?;
+                    self.write_mem(bus, addr, Sz::W, v >> 16)?;
+                } else {
+                    self.write_mem(bus, addr, sz, v)?;
+                }
             }
             self.set_an(an, addr);
             return self.prefetch_next(bus);
@@ -168,7 +174,12 @@ impl Cpu {
         let mask = self.extension(bus)?;
         let (m, r) = src_field(op);
         let mut addr = if m == 3 {
-            self.an(r as usize)
+            let a = self.an(r as usize);
+            if a & 1 != 0 && mask != 0 {
+                // SingleStepTests: An has moved by 2 when the first read faults.
+                self.set_an(r as usize, a.wrapping_add(2));
+            }
+            a
         } else {
             let Loc::Mem(a) = self.ea(bus, m, r, sz, false)? else {
                 unreachable!("decode accepts control modes and (An)+ only")

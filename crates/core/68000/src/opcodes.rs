@@ -122,6 +122,7 @@ pub(crate) enum Op {
     Chk,
     Trap,
     Trapv,
+    Stop,
 }
 
 /// A set of effective-address modes, one bit per mode in `EaSet::*` order.
@@ -870,6 +871,7 @@ pub static OPCODES: &[OpPattern] = &[
     p(0xF1C0, 0x4180, "chk", EaSet::DATA, N, Op::Chk),
     p(0xFFF0, 0x4E40, "trap", N, N, Op::Trap),
     p(0xFFFF, 0x4E76, "trapv", N, N, Op::Trapv),
+    p(0xFFFF, 0x4E72, "stop", N, N, Op::Stop),
     p(0xF1C0, 0xB0C0, "cmpa.w", EaSet::ALL, N, Op::Cmpa(Sz::W)),
     p(0xF1C0, 0xB1C0, "cmpa.l", EaSet::ALL, N, Op::Cmpa(Sz::L)),
 ];

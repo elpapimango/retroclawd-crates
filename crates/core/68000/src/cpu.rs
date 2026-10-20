@@ -4,6 +4,7 @@ use crate::bus::{FunctionCode, M68kBus, Size};
 use crate::opcodes::{Op, decode};
 use serde::{Deserialize, Serialize};
 
+pub(crate) const SR_T: u16 = 0x8000;
 pub(crate) const SR_S: u16 = 0x2000;
 pub(crate) const SR_MASK: u16 = 0x0700;
 /// The bits of SR that exist on the 68000: T, S, I2-I0, X, N, Z, V, C (UM 2.3).
@@ -52,10 +53,30 @@ pub struct Cpu {
     pub pc: u32,
     sr: u16,
     /// The two-word prefetch queue: the words at `pc` and `pc + 2`.
-    prefetch: [u16; 2],
-    run: RunState,
+    pub(crate) prefetch: [u16; 2],
+    pub(crate) run: RunState,
     /// IPL2-IPL0, sampled at instruction boundaries.
-    ipl: u8,
+    pub(crate) ipl: u8,
+    /// A level-7 request already taken (level 7 interrupts on each rising edge, UM 6.3.2).
+    #[serde(default)]
+    pub(crate) nmi_seen: bool,
+    /// The opcode of the instruction being executed (the IR stacked by a group 0 frame).
+    #[serde(skip)]
+    pub(crate) ir: u16,
+    /// Address of the instruction being executed.
+    #[serde(skip)]
+    pub(crate) instruction_pc: u32,
+    /// Processing an instruction (or a group 2 exception) rather than a group 0/1 exception: the I/N bit.
+    #[serde(skip)]
+    pub(crate) in_instruction: bool,
+    /// Inside group 0 processing: another bus or address error halts the CPU.
+    #[serde(skip)]
+    pub(crate) in_group0: bool,
+    /// The PC a raised group 1/2 exception stacks, and its internal clocks before stacking (`Cpu::raise`).
+    #[serde(skip)]
+    pub(crate) exception_pc: u32,
+    #[serde(skip)]
+    pub(crate) exception_idle: u32,
     /// Clocks spent by the current `step` or `reset`.
     #[serde(skip)]
     clocks: u32,
@@ -82,6 +103,13 @@ impl Cpu {
             prefetch: [0; 2],
             run: RunState::Running,
             ipl: 0,
+            nmi_seen: false,
+            ir: 0,
+            instruction_pc: 0,
+            in_instruction: false,
+            in_group0: false,
+            exception_pc: 0,
+            exception_idle: 0,
             clocks: 0,
             unsynced: 0,
         }
@@ -185,7 +213,6 @@ impl Cpu {
         fc: FunctionCode,
         instruction: bool,
     ) -> Result<u32, Fault> {
-        let addr = addr & ADDR_MASK;
         if size == Size::Word && addr & 1 != 0 {
             return Err(Fault::Address {
                 addr,
@@ -196,12 +223,13 @@ impl Cpu {
         }
         self.flush_sync(bus);
         self.clocks += 4;
-        bus.read(addr, size, fc).map_err(|_| Fault::Bus {
-            addr,
-            write: false,
-            fc,
-            instruction,
-        })
+        bus.read(addr & ADDR_MASK, size, fc)
+            .map_err(|_| Fault::Bus {
+                addr,
+                write: false,
+                fc,
+                instruction,
+            })
     }
 
     /// One write cycle (4 clocks).
@@ -213,7 +241,6 @@ impl Cpu {
         value: u32,
         fc: FunctionCode,
     ) -> Result<(), Fault> {
-        let addr = addr & ADDR_MASK;
         if size == Size::Word && addr & 1 != 0 {
             return Err(Fault::Address {
                 addr,
@@ -224,12 +251,13 @@ impl Cpu {
         }
         self.flush_sync(bus);
         self.clocks += 4;
-        bus.write(addr, size, value, fc).map_err(|_| Fault::Bus {
-            addr,
-            write: true,
-            fc,
-            instruction: false,
-        })
+        bus.write(addr & ADDR_MASK, size, value, fc)
+            .map_err(|_| Fault::Bus {
+                addr,
+                write: true,
+                fc,
+                instruction: false,
+            })
     }
 
     /// The reset exception (UM 6.3.1): S set, T cleared, mask 7; the SSP from vector long 0 and the PC from long 1,
@@ -263,13 +291,29 @@ impl Cpu {
     /// Executes one instruction (or, when stopped or halted, lets 4 clocks pass). Returns the clocks it took.
     pub fn step<B: M68kBus>(&mut self, bus: &mut B) -> u32 {
         self.clocks = 0;
-        if self.run != RunState::Running {
-            self.idle(4);
-        } else {
-            let opcode = self.prefetch[0];
-            if let Err(_fault) = self.execute(bus, opcode) {
-                // Group 0 exception processing arrives with the exception work.
-            }
+        match self.run {
+            RunState::Halted => self.idle(4),
+            RunState::Stopped => match self.interrupt_due() {
+                Some(level) => self.interrupt(bus, level),
+                None => self.idle(4),
+            },
+            RunState::Running => match self.interrupt_due() {
+                Some(level) => self.interrupt(bus, level),
+                None => {
+                    let tracing = self.sr & SR_T != 0;
+                    self.ir = self.prefetch[0];
+                    self.instruction_pc = self.pc;
+                    self.in_instruction = true;
+                    match self.execute(bus, self.ir) {
+                        Ok(()) if tracing => {
+                            self.run = RunState::Running;
+                            self.trace(bus);
+                        }
+                        Ok(()) => {}
+                        Err(fault) => self.group0(bus, fault),
+                    }
+                }
+            },
         }
         self.flush_sync(bus);
         self.clocks
@@ -333,8 +377,15 @@ impl Cpu {
             Op::Chk => self.op_chk(bus, opcode),
             Op::Trap => self.op_trap(opcode),
             Op::Trapv => self.op_trapv(bus),
-            // Exception processing arrives with the exception work.
-            Op::Illegal => self.prefetch_next(bus),
+            Op::Stop => self.op_stop(bus),
+            Op::Illegal => {
+                let vector = match opcode >> 12 {
+                    0xA => crate::exception::VECTOR_LINE_A,
+                    0xF => crate::exception::VECTOR_LINE_F,
+                    _ => crate::exception::VECTOR_ILLEGAL,
+                };
+                Err(self.raise(vector, self.pc, 4))
+            }
         }
     }
 

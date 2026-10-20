@@ -113,16 +113,14 @@ impl Cpu {
         let src = self.ea(bus, m, r, Sz::W, false)?;
         let bound = self.read_loc(bus, src, Sz::W)? as u16 as i16;
         let v = self.d[((op >> 9) & 7) as usize] as u16 as i16;
-        let ccr = self.sr() & 0x10;
-        if v < 0 {
-            self.set_sr((self.sr() & 0xFF00) | ccr | 0x08);
-            self.idle(4);
-            return Err(Fault::Exception(VECTOR_CHK));
-        }
-        if v > bound {
-            self.set_sr((self.sr() & 0xFF00) | ccr);
-            self.idle(4);
-            return Err(Fault::Exception(VECTOR_CHK));
+        if v > bound || v < 0 {
+            // Trap (SingleStepTests): N from Dn.W, Z/V/C cleared; the next word is prefetched first, then 4
+            // internal clocks when Dn.W > bound, 6 when it is only negative.
+            let n = if v < 0 { 0x08 } else { 0 };
+            self.set_sr((self.sr() & 0xFF10) | n);
+            self.prefetch_next(bus)?;
+            let idle = if v > bound { 4 } else { 6 };
+            return Err(self.raise(VECTOR_CHK, self.pc, idle));
         }
         // No trap: Z from Dn.W, V and C cleared, N kept (SingleStepTests; PRM leaves Z, V, C undefined).
         let z = if v == 0 { 0x04 } else { 0 };
@@ -132,13 +130,14 @@ impl Cpu {
     }
 
     pub(crate) fn op_trap(&mut self, op: u16) -> Result<(), Fault> {
-        Err(Fault::Exception(VECTOR_TRAP0 + (op & 0xF) as u8))
+        Err(self.raise(VECTOR_TRAP0 + (op & 0xF) as u8, self.pc.wrapping_add(2), 4))
     }
 
     pub(crate) fn op_trapv<B: M68kBus>(&mut self, bus: &mut B) -> Result<(), Fault> {
+        self.prefetch_next(bus)?;
         if self.sr() & 0x02 != 0 {
-            return Err(Fault::Exception(VECTOR_TRAPV));
+            return Err(self.raise(VECTOR_TRAPV, self.pc, 0));
         }
-        self.prefetch_next(bus)
+        Ok(())
     }
 }

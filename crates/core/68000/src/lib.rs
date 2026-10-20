@@ -9,6 +9,7 @@
 mod bus;
 mod cpu;
 mod ea;
+mod exception;
 pub mod opcodes;
 mod ops;
 
