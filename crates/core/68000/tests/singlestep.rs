@@ -285,6 +285,27 @@ fn takes_exception(case: &Case) -> bool {
     })
 }
 
+/// Known disagreements between the test data and the Programmer's Reference Manual, kept to the manual's
+/// behaviour. Each returns true when `diff` is exactly that disagreement for `case`.
+///
+/// ASR by a register count larger than the operand size on a negative operand: the data has C = X = 0, PRM 4
+/// (ASL, ASR: "C - Set according to the last bit shifted out of the operand") gives the sign bit, 1. Only the
+/// count > size cases disagree (count == size has C = X = 1 in the data too). Reported to the owner 2026-10-19.
+fn known_disagreement(case: &Case, diff: &str) -> bool {
+    let op = u16::from_str_radix(&case.name[..4], 16).unwrap_or(0);
+    let asr_register_count =
+        op & 0xF018 == 0xE000 && op & 0x01C0 != 0x00C0 && op & 0x0120 == 0x0020;
+    if !asr_register_count {
+        return false;
+    }
+    let bits = 8u32 << ((op >> 6) & 3);
+    let count = case.initial.d()[((op >> 9) & 7) as usize] & 63;
+    let value = case.initial.d()[(op & 7) as usize];
+    let negative = value >> (bits - 1) & 1 != 0;
+    let ours = case.expected.sr | 0x11;
+    count > bits && negative && diff == format!("sr {ours:04X} want {:04X}", case.expected.sr)
+}
+
 fn dir() -> PathBuf {
     std::env::var_os("RC_SST_DIR")
         .map(PathBuf::from)
@@ -326,7 +347,7 @@ fn run_file(file: &str) {
             if print {
                 println!("{}\t{}", case.name, diff);
             }
-            if !allowed.contains(&case.name) {
+            if !allowed.contains(&case.name) && !known_disagreement(case, &diff) {
                 unexpected.push(format!("{}: {}", case.name, diff));
             }
         }
@@ -403,4 +424,40 @@ sst! {
     suba_l => "SUBA.l",
     cmpa_w => "CMPA.w",
     cmpa_l => "CMPA.l",
+    and_b => "AND.b",
+    and_w => "AND.w",
+    and_l => "AND.l",
+    or_b => "OR.b",
+    or_w => "OR.w",
+    or_l => "OR.l",
+    eor_b => "EOR.b",
+    eor_w => "EOR.w",
+    eor_l => "EOR.l",
+    not_b => "NOT.b",
+    not_w => "NOT.w",
+    not_l => "NOT.l",
+    asl_b => "ASL.b",
+    asl_w => "ASL.w",
+    asl_l => "ASL.l",
+    asr_b => "ASR.b",
+    asr_w => "ASR.w",
+    asr_l => "ASR.l",
+    lsl_b => "LSL.b",
+    lsl_w => "LSL.w",
+    lsl_l => "LSL.l",
+    lsr_b => "LSR.b",
+    lsr_w => "LSR.w",
+    lsr_l => "LSR.l",
+    rol_b => "ROL.b",
+    rol_w => "ROL.w",
+    rol_l => "ROL.l",
+    ror_b => "ROR.b",
+    ror_w => "ROR.w",
+    ror_l => "ROR.l",
+    roxl_b => "ROXL.b",
+    roxl_w => "ROXL.w",
+    roxl_l => "ROXL.l",
+    roxr_b => "ROXR.b",
+    roxr_w => "ROXR.w",
+    roxr_l => "ROXR.l",
 }

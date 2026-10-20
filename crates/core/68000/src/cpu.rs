@@ -298,6 +298,12 @@ impl Cpu {
             Op::Cmpi(sz) => self.op_cmpi(bus, opcode, sz),
             Op::Neg(sz) => self.op_neg(bus, opcode, sz, false),
             Op::Negx(sz) => self.op_neg(bus, opcode, sz, true),
+            Op::Logic(logic, sz) => self.op_logic(bus, opcode, logic, sz),
+            Op::LogicMem(logic, sz) => self.op_logic_mem(bus, opcode, logic, sz),
+            Op::LogicI(logic, sz) => self.op_logic_i(bus, opcode, logic, sz),
+            Op::Not(sz) => self.op_not(bus, opcode, sz),
+            Op::Shift(kind, sz) => self.op_shift(bus, opcode, kind, sz),
+            Op::ShiftMem(kind) => self.op_shift_mem(bus, opcode, kind),
             // Exception processing arrives with the exception work.
             Op::Illegal => self.prefetch_next(bus),
         }
