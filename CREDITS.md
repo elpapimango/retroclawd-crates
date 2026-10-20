@@ -11,6 +11,17 @@ not from independent derivation.
 > are credited in `CREDITS.md` of `retroclawd-sinclair`, `retroclawd-amstrad` and
 > `retroclawd-commodore`.
 
+## MOS 6520 PIA (`crates/chips/pia-6520`)
+
+Register decoding, direction selection, asymmetric port A/B readback,
+edge-latched interrupt status, C1/C2 interrupt enable/polarity, C2
+handshake/pulse/manual outputs and reset behavior: Avery Lee's
+[Altirra Hardware Reference Manual](https://www.virtualdub.org/downloads/Altirra%20Hardware%20Reference%20Manual.pdf),
+2026-01-02, sections 2.5 and 14.5, pages 34-36 and 453-456.
+This is a fresh implementation of documented hardware behavior, not a
+translation of an emulator. Machine-specific wiring, analogue floating-input
+decay and output-to-input spurious C2 interrupts are outside this implementation.
+
 ## AY-3-8910 chip emulation (`crates/ay-3-8910`)
 
 The tone/noise/envelope generator algorithms and the 16-step logarithmic

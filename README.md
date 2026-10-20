@@ -9,6 +9,7 @@ repository needs. They carry no machine and no application code.
 - `crates/core/6502`
 - `crates/chips/ay-3-8910`
 - `crates/chips/nec765`
+- `crates/chips/pia-6520`
 - `crates/formats/dsk`
 - `crates/formats/zx-tape`
 
@@ -21,6 +22,10 @@ repository needs. They carry no machine and no application code.
   (`disassemble`/`assemble_one`; the `_at` variants show and take branch targets as absolute addresses).
 - `ay-3-8910`, `nec765`, `dsk`, `zx-tape` -- the chip and file formats shared by the Sinclair and Amstrad
   machines.
+- `pia-6520` -- CPU-independent MOS 6520 PIA: port direction and pin readback,
+  edge-latched interrupts, handshake/pulse/manual C2 outputs and alternate
+  register decoding. Atari board wiring stays in its Family. Analogue input
+  decay and output-to-input spurious C2 interrupts are not modeled.
 
 ## Who uses it
 
