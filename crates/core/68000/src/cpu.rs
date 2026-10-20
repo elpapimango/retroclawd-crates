@@ -72,6 +72,9 @@ pub struct Cpu {
     /// Inside group 0 processing: another bus or address error halts the CPU.
     #[serde(skip)]
     pub(crate) in_group0: bool,
+    /// The last exception taken (`Cpu::take_exception`).
+    #[serde(skip)]
+    pub(crate) last_exception: Option<crate::exception::ExceptionRecord>,
     /// The PC a raised group 1/2 exception stacks, and its internal clocks before stacking (`Cpu::raise`).
     #[serde(skip)]
     pub(crate) exception_pc: u32,
@@ -108,6 +111,7 @@ impl Cpu {
             instruction_pc: 0,
             in_instruction: false,
             in_group0: false,
+            last_exception: None,
             exception_pc: 0,
             exception_idle: 0,
             clocks: 0,

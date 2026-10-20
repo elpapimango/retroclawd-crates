@@ -18,7 +18,31 @@ pub(crate) const VECTOR_LINE_F: u8 = 11;
 pub(crate) const VECTOR_SPURIOUS: u8 = 24;
 pub(crate) const VECTOR_AUTOVECTOR_BASE: u8 = 24;
 
+/// The last exception the CPU took (for diagnostics; `Cpu::take_exception`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExceptionRecord {
+    pub vector: u8,
+    /// The PC the frame stacked.
+    pub pc: u32,
+    /// The SR before the exception.
+    pub sr: u16,
+    /// For a bus or address error: the access that faulted.
+    pub fault: Option<FaultInfo>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FaultInfo {
+    pub addr: u32,
+    pub write: bool,
+    pub fc: FunctionCode,
+}
+
 impl Cpu {
+    /// The exception taken since the last call, if any.
+    pub fn take_exception(&mut self) -> Option<ExceptionRecord> {
+        self.last_exception.take()
+    }
+
     /// Enters supervisor mode with T cleared and returns the SR before.
     fn enter_exception(&mut self) -> u16 {
         let old = self.sr();
@@ -34,6 +58,12 @@ impl Cpu {
         pc: u32,
         sr: u16,
     ) -> Result<(), Fault> {
+        self.last_exception = Some(ExceptionRecord {
+            vector,
+            pc,
+            sr,
+            fault: None,
+        });
         // SingleStepTests order: PC low word, SR, PC high word.
         let sp = self.ssp.wrapping_sub(6);
         self.ssp = sp;
@@ -118,6 +148,12 @@ impl Cpu {
         // a jump target, the target - 4), 4 internal clocks, then PC low, SR, PC high, IR, access address low,
         // the information word, access address high. The I/N bit is set for a program fetch.
         let pc = if fetch { addr.wrapping_sub(4) } else { self.pc };
+        self.last_exception = Some(ExceptionRecord {
+            vector,
+            pc,
+            sr,
+            fault: Some(FaultInfo { addr, write, fc }),
+        });
         self.idle(4);
         let result = (|| {
             let sp = self.ssp.wrapping_sub(14);

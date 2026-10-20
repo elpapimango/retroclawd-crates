@@ -287,3 +287,28 @@ fn double_bus_fault_halts() {
     assert_eq!(cpu.run_state(), RunState::Halted);
     assert_eq!(cpu.step(&mut bus), 4);
 }
+
+#[test]
+fn a_taken_exception_is_reported_once() {
+    let (mut cpu, mut bus) = boot(&[0x4AFC]);
+    assert_eq!(cpu.take_exception(), None);
+    cpu.step(&mut bus);
+    let e = cpu.take_exception().expect("recorded");
+    assert_eq!((e.vector, e.pc, e.sr), (4, START, 0x2700));
+    assert_eq!(e.fault, None);
+    assert_eq!(cpu.take_exception(), None);
+}
+
+#[test]
+fn an_address_error_reports_the_fault() {
+    let (mut cpu, mut bus) = boot(&[0x3010]);
+    cpu.a[0] = 0x1001;
+    cpu.step(&mut bus);
+    let e = cpu.take_exception().expect("recorded");
+    assert_eq!(e.vector, 3);
+    let f = e.fault.expect("fault details");
+    assert_eq!(
+        (f.addr, f.write, f.fc),
+        (0x1001, false, FunctionCode::SUPERVISOR_DATA)
+    );
+}

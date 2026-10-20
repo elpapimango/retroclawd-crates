@@ -16,3 +16,4 @@ mod ops;
 
 pub use bus::{BusFault, FunctionCode, IackResponse, M68kBus, Size};
 pub use cpu::{Cpu, RunState};
+pub use exception::{ExceptionRecord, FaultInfo};
