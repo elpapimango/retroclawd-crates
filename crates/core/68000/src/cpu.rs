@@ -72,6 +72,9 @@ pub struct Cpu {
     /// Inside group 0 processing: another bus or address error halts the CPU.
     #[serde(skip)]
     pub(crate) in_group0: bool,
+    /// The bus or address error that halted the CPU (`Cpu::halt_reason`).
+    #[serde(skip)]
+    pub(crate) halt_fault: Option<crate::exception::FaultInfo>,
     /// The last exception taken (`Cpu::take_exception`).
     #[serde(skip)]
     pub(crate) last_exception: Option<crate::exception::ExceptionRecord>,
@@ -112,6 +115,7 @@ impl Cpu {
             in_instruction: false,
             in_group0: false,
             last_exception: None,
+            halt_fault: None,
             exception_pc: 0,
             exception_idle: 0,
             clocks: 0,
@@ -271,10 +275,11 @@ impl Cpu {
         self.clocks = 0;
         self.unsynced = 0;
         self.run = RunState::Running;
+        self.halt_fault = None;
         self.sr = (self.sr & 0x001F) | SR_S | SR_MASK;
-        if self.reset_reads(bus).is_err() {
+        if let Err(fault) = self.reset_reads(bus) {
             // A fault while reading the reset vectors cannot be processed: the CPU halts (UM 6.3.9.1).
-            self.run = RunState::Halted;
+            self.halt(fault);
         }
         self.flush_sync(bus);
         self.clocks

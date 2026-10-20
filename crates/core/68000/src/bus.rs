@@ -1,8 +1,10 @@
 //! What the core needs from the machine around it.
 //!
 //! The MC68000 has a 16-bit data bus: every access is one byte or one word cycle (UM 5.1). A long operand is two
-//! word cycles, issued by the core in the order the hardware uses for that instruction, so a machine sees exactly
-//! the cycles a real 68000 puts on the bus. Each access carries the function code (UM 5.1.2, Table 5-1) so a
+//! word cycles. A machine sees the cycles a real 68000 puts on the bus (count, size, function code, address) and
+//! the instruction's exact total of clocks; the position of internal clocks between the cycles, and the order of
+//! some cycles, match SingleStepTests in only about 58% of its cases (`RC_SST_BUS=1`), which the accurate mode
+//! needs (design spec, Phase 3) before a machine may rely on per-cycle timing. Each access carries the function code (UM 5.1.2, Table 5-1) so a
 //! machine can tell user from supervisor and program from data, and answer the interrupt-acknowledge cycle.
 
 use serde::{Deserialize, Serialize};

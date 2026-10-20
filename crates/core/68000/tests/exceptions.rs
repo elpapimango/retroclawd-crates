@@ -312,3 +312,47 @@ fn an_address_error_reports_the_fault() {
         (0x1001, false, FunctionCode::SUPERVISOR_DATA)
     );
 }
+
+#[test]
+fn jumps_near_the_top_of_the_address_space_wrap() {
+    // JSR $0100.W at PC $FFFFFFFC: the return address wraps past 2^32.
+    let (mut cpu, mut bus) = boot(&[0x4E71]);
+    cpu.pc = 0xFFFF_FFFC;
+    cpu.set_prefetch([0x4EB8, 0x0100]);
+    cpu.step(&mut bus);
+    assert_eq!(cpu.pc, 0x100);
+    assert_eq!(
+        bus.long(SSP - 4),
+        0x0000_0000,
+        "return address $FFFFFFFC + 4 wraps to 0"
+    );
+    // JSR abs.L at PC $FFFFFFFA.
+    let (mut cpu, mut bus) = boot(&[0x4E71]);
+    cpu.pc = 0xFFFF_FFFA;
+    cpu.set_prefetch([0x4EB9, 0x0000]);
+    cpu.step(&mut bus);
+    assert_eq!(cpu.pc & 0xFF_FFFF, (bus.word(0xFF_FFFE) as u32) & 0xFF_FFFE);
+}
+
+#[test]
+fn a_halt_records_the_fault_that_caused_it() {
+    let (mut cpu, mut bus) = boot(&[0x3010]);
+    assert_eq!(cpu.halt_reason(), None);
+    cpu.a[0] = 0x4000;
+    bus.fault_at = Some(0x4000);
+    cpu.ssp = 0x4000 + 14;
+    cpu.step(&mut bus);
+    assert_eq!(cpu.run_state(), RunState::Halted);
+    let f = cpu.halt_reason().expect("why it halted");
+    assert_eq!(f.addr & 0xFF_FFFE, 0x4000);
+}
+
+#[test]
+fn an_odd_reset_pc_halts_with_the_fault_recorded() {
+    let mut bus = Bus::new(&[]);
+    bus.mem[4..8].copy_from_slice(&0x0000_2001u32.to_be_bytes());
+    let mut cpu = Cpu::new();
+    cpu.reset(&mut bus);
+    assert_eq!(cpu.run_state(), RunState::Halted);
+    assert_eq!(cpu.halt_reason().map(|f| f.addr), Some(0x2001));
+}

@@ -38,6 +38,25 @@ pub struct FaultInfo {
 }
 
 impl Cpu {
+    /// The bus or address error that halted the CPU (a double fault, or a fault reading the reset vectors).
+    pub fn halt_reason(&self) -> Option<FaultInfo> {
+        self.halt_fault
+    }
+
+    /// Halts the CPU (UM 6.3.9.1), remembering the fault.
+    pub(crate) fn halt(&mut self, fault: Fault) {
+        self.run = RunState::Halted;
+        self.halt_fault = match fault {
+            Fault::Bus {
+                addr, write, fc, ..
+            }
+            | Fault::Address {
+                addr, write, fc, ..
+            } => Some(FaultInfo { addr, write, fc }),
+            Fault::Exception(_) => None,
+        };
+    }
+
     /// The exception taken since the last call, if any.
     pub fn take_exception(&mut self) -> Option<ExceptionRecord> {
         self.last_exception.take()
@@ -116,7 +135,7 @@ impl Cpu {
     /// processing one halts the CPU.
     pub(crate) fn group0<B: M68kBus>(&mut self, bus: &mut B, fault: Fault) {
         if self.in_group0 {
-            self.run = RunState::Halted;
+            self.halt(fault);
             return;
         }
         let (vector, addr, write, fc, fetch) = match fault {
@@ -167,8 +186,8 @@ impl Cpu {
             self.write_mem(bus, sp.wrapping_add(2), Sz::W, addr >> 16)?;
             self.take_vector(bus, vector)
         })();
-        if result.is_err() {
-            self.run = RunState::Halted;
+        if let Err(fault) = result {
+            self.halt(fault);
         }
         self.in_group0 = false;
     }

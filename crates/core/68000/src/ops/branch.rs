@@ -131,28 +131,34 @@ impl Cpu {
             (2, _) => (self.an(r as usize), next),
             (5, _) => {
                 self.idle(2);
-                (self.an(r as usize).wrapping_add(sext16(ext)), next + 2)
+                (
+                    self.an(r as usize).wrapping_add(sext16(ext)),
+                    next.wrapping_add(2),
+                )
             }
             (6, _) => {
                 self.idle(6);
-                (self.index_target(self.an(r as usize), ext), next + 2)
+                (
+                    self.index_target(self.an(r as usize), ext),
+                    next.wrapping_add(2),
+                )
             }
             (7, 0) => {
                 self.idle(2);
-                (sext16(ext), next + 2)
+                (sext16(ext), next.wrapping_add(2))
             }
             (7, 1) => {
                 let fc = self.program_fc();
                 let lo = self.bus_read(bus, self.pc.wrapping_add(4), Size::Word, fc, true)?;
-                (ext << 16 | lo, next + 4)
+                (ext << 16 | lo, next.wrapping_add(4))
             }
             (7, 2) => {
                 self.idle(2);
-                (next.wrapping_add(sext16(ext)), next + 2)
+                (next.wrapping_add(sext16(ext)), next.wrapping_add(2))
             }
             _ => {
                 self.idle(6);
-                (self.index_target(next, ext), next + 2)
+                (self.index_target(next, ext), next.wrapping_add(2))
             }
         })
     }
