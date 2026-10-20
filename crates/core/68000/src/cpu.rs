@@ -326,6 +326,13 @@ impl Cpu {
             Op::Movep => self.op_movep(bus, opcode),
             Op::Bit(is_static) => self.op_bit(bus, opcode, is_static),
             Op::Tas => self.op_tas(bus, opcode),
+            Op::Mul(signed) => self.op_mul(bus, opcode, signed),
+            Op::Div(signed) => self.op_div(bus, opcode, signed),
+            Op::Bcd(add) => self.op_bcd(bus, opcode, add),
+            Op::Nbcd => self.op_nbcd(bus, opcode),
+            Op::Chk => self.op_chk(bus, opcode),
+            Op::Trap => self.op_trap(opcode),
+            Op::Trapv => self.op_trapv(bus),
             // Exception processing arrives with the exception work.
             Op::Illegal => self.prefetch_next(bus),
         }

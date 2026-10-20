@@ -115,6 +115,13 @@ pub(crate) enum Op {
     Movep,
     Bit(bool),
     Tas,
+    Mul(bool),
+    Div(bool),
+    Bcd(bool),
+    Nbcd,
+    Chk,
+    Trap,
+    Trapv,
 }
 
 /// A set of effective-address modes, one bit per mode in `EaSet::*` order.
@@ -853,6 +860,16 @@ pub static OPCODES: &[OpPattern] = &[
     p(0xFFC0, 0x0880, "bclr", EaSet::DATA_ALT, N, Op::Bit(true)),
     p(0xFFC0, 0x08C0, "bset", EaSet::DATA_ALT, N, Op::Bit(true)),
     p(0xFFC0, 0x4AC0, "tas", EaSet::DATA_ALT, N, Op::Tas),
+    p(0xF1C0, 0xC0C0, "mulu", EaSet::DATA, N, Op::Mul(false)),
+    p(0xF1C0, 0xC1C0, "muls", EaSet::DATA, N, Op::Mul(true)),
+    p(0xF1C0, 0x80C0, "divu", EaSet::DATA, N, Op::Div(false)),
+    p(0xF1C0, 0x81C0, "divs", EaSet::DATA, N, Op::Div(true)),
+    p(0xF1F0, 0xC100, "abcd", N, N, Op::Bcd(true)),
+    p(0xF1F0, 0x8100, "sbcd", N, N, Op::Bcd(false)),
+    p(0xFFC0, 0x4800, "nbcd", EaSet::DATA_ALT, N, Op::Nbcd),
+    p(0xF1C0, 0x4180, "chk", EaSet::DATA, N, Op::Chk),
+    p(0xFFF0, 0x4E40, "trap", N, N, Op::Trap),
+    p(0xFFFF, 0x4E76, "trapv", N, N, Op::Trapv),
     p(0xF1C0, 0xB0C0, "cmpa.w", EaSet::ALL, N, Op::Cmpa(Sz::W)),
     p(0xF1C0, 0xB1C0, "cmpa.l", EaSet::ALL, N, Op::Cmpa(Sz::L)),
 ];
