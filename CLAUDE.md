@@ -51,6 +51,12 @@ Written in the pre-split repository; mentions of `zx-spectrum`, `c64`, `retrocla
   `Bus` impl already overrides both, so this changed nothing for them;
   it only stopped being a forced no-op for a CPU family that never
   needed the concept.
+- **`mc68000`** (`crates/core/68000`, 2026-10-20) — Motorola 68000: its own bus trait `M68kBus` (byte and word cycles
+  with function codes, `iack`, a `sync` hook for internal clocks, `reset_devices`), `Cpu::step` returning clocks, the
+  two-word prefetch queue, all exceptions, `take_exception` for diagnostics, `disassemble`, and `opcodes::OPCODES`,
+  the one pattern table decoding and disassembly share. Conformance: `tests/singlestep.rs` (SingleStepTests 68000/v1,
+  fetched by `scripts/fetch_singlesteptests.sh`, never committed), `tests/exceptions.rs`, `tests/disassemble.rs`,
+  `tests/differential.rs` (`--ignored`, against `m68k` 0.14.6). See CREDITS.md for the numbers.
 - **`ay-3-8910`** — emulates the General Instrument AY-3-8910 PSG (3 tone
   channels sharing one noise generator + one envelope generator), used by
   the Spectrum 128K/+2/+3, Amstrad CPC, MSX, and many arcade boards --
