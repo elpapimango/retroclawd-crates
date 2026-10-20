@@ -74,6 +74,13 @@ name = "machine"
 version = "0.1.0"
 
 [[package]]
+name = "mc68000"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

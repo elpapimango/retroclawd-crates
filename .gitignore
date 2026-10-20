@@ -2,3 +2,4 @@
 *.log
 dist/
 # ROM images are copyrighted; this repository is private.
+crates/core/68000/tests/sst/

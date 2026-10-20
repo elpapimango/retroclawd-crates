@@ -1,0 +1,11 @@
+[package]
+# "68000" isn't a legal Rust identifier, so the crate is "mc68000" -- the
+# directory stays `crates/core/68000`, like `crates/core/6502` / `mos6502`.
+name = "mc68000"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Motorola MC68000 CPU core: instruction set, exceptions, a function-code-aware bus and a disassembler"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
