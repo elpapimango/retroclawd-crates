@@ -8,6 +8,7 @@
 
 mod bus;
 mod cpu;
+pub mod disassemble;
 mod ea;
 mod exception;
 pub mod opcodes;

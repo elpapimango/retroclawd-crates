@@ -152,3 +152,22 @@ image format": Track Information block fields 0x10-0x17, sector-info bytes
 4/5 as ST1/ST2, Extended per-track size table in 256-byte units.
 
 
+
+## MC68000 core (`crates/core/68000`, package `mc68000`)
+
+Written from the manuals; no code, table or comment of another core is copied.
+
+- *M68000 8-/16-/32-Bit Microprocessors User's Manual*, ninth edition (Motorola, 1993; M68000UM/AD): exception
+  processing (section 6), bus cycles and function codes (section 5), instruction clock counts (section 8). Copy used:
+  https://cdn.hackaday.io/files/1805367724052224/M68000UM_AD_M68000_Microprocessor_Users_Manual_Rev8_1993.pdf
+- *M68000 Family Programmer's Reference Manual* (M68000PM/AD): instruction encodings and condition codes.
+- SingleStepTests/680x0 (https://github.com/SingleStepTests/680x0), commit
+  `e0d5ece9670205cc84a0101081837deb446f86a3`, `68000/v1`: the conformance gate (`tests/singlestep.rs`). The
+  repository states no licence, so it is downloaded at test time by `scripts/fetch_singlesteptests.sh` and never
+  committed. 996 322 of 1 000 060 cases match exactly (state, prefetch queue, RAM, clock count); 3 736 are ASR by a
+  register count larger than the operand size on a negative operand, where the data clears C and X and the PRM gives
+  the sign bit (kept to the PRM, allowed by a narrow rule in the harness); 2 are bad data reported upstream
+  (https://github.com/SingleStepTests/680x0/issues/4). Where the manuals leave flags undefined (BCD N/V, CHK, DIV
+  overflow) or give no bus order around a fault, the core follows this data.
+- `m68k` 0.14.6 (https://github.com/benletchford/m68k-rs, MIT): a dev-dependency of `tests/differential.rs` only,
+  an independent oracle for random instructions. It is never linked into the core or a machine.
