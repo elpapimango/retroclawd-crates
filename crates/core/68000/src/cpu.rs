@@ -37,6 +37,8 @@ pub(crate) enum Fault {
         fc: FunctionCode,
         instruction: bool,
     },
+    /// A group 1 or 2 exception the instruction raised (privilege violation, TRAP, CHK, ...): its vector.
+    Exception(u8),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -314,6 +316,16 @@ impl Cpu {
             Op::Rte => self.op_rte(bus),
             Op::Link => self.op_link(bus, opcode),
             Op::Unlk => self.op_unlk(bus, opcode),
+            Op::LogicSr(logic, to_sr) => self.op_logic_sr(bus, logic, to_sr),
+            Op::MoveToSr(to_sr) => self.op_move_to_sr(bus, opcode, to_sr),
+            Op::MoveFromSr => self.op_move_from_sr(bus, opcode),
+            Op::MoveUsp => self.op_move_usp(bus, opcode),
+            Op::Reset => self.op_reset(bus),
+            Op::MovemToMem(sz) => self.op_movem_to_mem(bus, opcode, sz),
+            Op::MovemToReg(sz) => self.op_movem_to_reg(bus, opcode, sz),
+            Op::Movep => self.op_movep(bus, opcode),
+            Op::Bit(is_static) => self.op_bit(bus, opcode, is_static),
+            Op::Tas => self.op_tas(bus, opcode),
             // Exception processing arrives with the exception work.
             Op::Illegal => self.prefetch_next(bus),
         }
