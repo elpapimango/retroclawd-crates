@@ -8,6 +8,9 @@
 
 mod bus;
 mod cpu;
+mod ea;
+pub mod opcodes;
+mod ops;
 
 pub use bus::{BusFault, FunctionCode, IackResponse, M68kBus, Size};
 pub use cpu::{Cpu, RunState};

@@ -1,9 +1,9 @@
 //! Registers, the prefetch queue, bus cycles and exception processing.
 
 use crate::bus::{FunctionCode, M68kBus, Size};
+use crate::opcodes::{Op, decode};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const SR_T: u16 = 0x8000;
 pub(crate) const SR_S: u16 = 0x2000;
 pub(crate) const SR_MASK: u16 = 0x0700;
 /// The bits of SR that exist on the 68000: T, S, I2-I0, X, N, Z, V, C (UM 2.3).
@@ -274,9 +274,20 @@ impl Cpu {
     }
 
     fn execute<B: M68kBus>(&mut self, bus: &mut B, opcode: u16) -> Result<(), Fault> {
-        match opcode {
-            0x4E71 => self.prefetch_next(bus),
-            _ => self.prefetch_next(bus),
+        match decode(opcode) {
+            Op::Nop => self.prefetch_next(bus),
+            Op::Move(sz) => self.op_move(bus, opcode, sz),
+            Op::Movea(sz) => self.op_movea(bus, opcode, sz),
+            Op::Moveq => self.op_moveq(bus, opcode),
+            Op::Lea => self.op_lea(bus, opcode),
+            Op::Pea => self.op_pea(bus, opcode),
+            Op::Clr(sz) => self.op_clr(bus, opcode, sz),
+            Op::Tst(sz) => self.op_tst(bus, opcode, sz),
+            Op::Exg => self.op_exg(bus, opcode),
+            Op::Swap => self.op_swap(bus, opcode),
+            Op::Ext(sz) => self.op_ext(bus, opcode, sz),
+            // Exception processing arrives with the exception work.
+            Op::Illegal => self.prefetch_next(bus),
         }
     }
 
