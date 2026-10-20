@@ -286,6 +286,18 @@ impl Cpu {
             Op::Exg => self.op_exg(bus, opcode),
             Op::Swap => self.op_swap(bus, opcode),
             Op::Ext(sz) => self.op_ext(bus, opcode, sz),
+            Op::Arith(alu, sz) => self.op_arith(bus, opcode, alu, sz),
+            Op::ArithMem(alu, sz) => self.op_arith_mem(bus, opcode, alu, sz),
+            Op::ArithA(alu, sz) => self.op_arith_a(bus, opcode, alu, sz),
+            Op::ArithX(alu, sz) => self.op_arith_x(bus, opcode, alu, sz),
+            Op::ArithI(alu, sz) => self.op_arith_i(bus, opcode, alu, sz),
+            Op::ArithQ(alu, sz) => self.op_arith_q(bus, opcode, alu, sz),
+            Op::Cmp(sz) => self.op_cmp(bus, opcode, sz),
+            Op::Cmpa(sz) => self.op_cmpa(bus, opcode, sz),
+            Op::Cmpm(sz) => self.op_cmpm(bus, opcode, sz),
+            Op::Cmpi(sz) => self.op_cmpi(bus, opcode, sz),
+            Op::Neg(sz) => self.op_neg(bus, opcode, sz, false),
+            Op::Negx(sz) => self.op_neg(bus, opcode, sz, true),
             // Exception processing arrives with the exception work.
             Op::Illegal => self.prefetch_next(bus),
         }
