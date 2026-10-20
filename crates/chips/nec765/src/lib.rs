@@ -44,7 +44,9 @@
 //! command with ST1 "overrun" (`&10`). A sector that is not found ends after two
 //! index holes; Read ID waits for the next ID; Format runs from one index hole
 //! to the next; Seek and Recalibrate step at the Specify step rate (`(16 - SRT)
-//! x 2 ms`, the CPC's 4 MHz clock), one cylinder at a time, keeping a present
+//! x 2 ms`, the CPC's 4 MHz clock; the first step pulse goes out at once, so a
+//! Read ID shortly after a Seek finds the head already moving, `fdc_seek`'s
+//! "seek then invalid" and "try read id during seek"), one cylinder at a time, keeping a present
 //! cylinder number per unit, and keep the unit's busy bit (MSR D0-D3) set until
 //! Sense Interrupt Status reports the seek. While the chip searches for a sector
 //! the main status register reads `CB` (`&10`; `fdc_read`'s "read data" reads it
@@ -1144,7 +1146,8 @@ impl<D: DiskMedium> Fdc<D> {
                 self.seeks[unit] = SeekState::Done { st0 };
                 return;
             }
-            _ => step_t,
+            // The first step pulse goes out at once, the next ones a step time apart.
+            _ => 1,
         };
         self.seeks[unit] = SeekState::InFlight {
             remaining,

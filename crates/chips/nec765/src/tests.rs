@@ -345,10 +345,11 @@ fn seek_without_a_disk_reports_not_ready_in_st0() {
 fn seek_timing_holds_seek_end_back_until_ticked() {
     let mut f = fdc(one_track_disk());
     f.enable_seek_timing();
-    send(&mut f, &[0x0F, 0x00, 5]); // 5 cylinders * 80 T-states
+    // 5 cylinders: the first step at once, then one every 80 T-states.
+    send(&mut f, &[0x0F, 0x00, 5]);
     f.write_data(0x08);
     assert_eq!(results(&mut f), vec![0x80], "still travelling");
-    f.tick(399);
+    f.tick(320);
     f.write_data(0x08);
     assert_eq!(results(&mut f), vec![0x80], "one T-state short");
     f.tick(1);
