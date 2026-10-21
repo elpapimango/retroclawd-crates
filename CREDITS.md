@@ -144,6 +144,23 @@ The regression covers the actual Acid800 SHY failure, all five opcodes,
 non-crossing and crossing stores, zero-page pointer wrap, 16-bit address
 wrap, unchanged flags/registers, TAS's stack update and exact final bus events.
 
+Acid800's CLI/SEI timing test also exposed the live-I interrupt check.
+The Core now retains I from before CLI, SEI and PLP for the next boundary;
+RTI's restored I applies immediately. Source: the same Altirra Hardware
+Reference, chapter 3, "Clearing/Setting the I flag with an interrupt pending".
+Focused bus tests cover delayed IRQ entry, pushed I, RTI and latch cleanup
+on reset, NMI and debugger status edits. No bus event or cycle is added.
+This fixes instruction-boundary mask sampling, not the full cycle-exact
+IRQ/NMI/BRK pipeline or taken-branch interrupt delay.
+
+The published `Cpu` serde bytes remain unchanged. Exact snapshots must store
+`Cpu::irq_poll_mask()` separately in their versioned machine envelope and
+restore it with `restore_irq_poll_mask`. Legacy states restore `None`,
+preserving their live-I boundary semantics because they contain no history.
+Atari 800 v3, VIC-20 v5 and the C64/C128/1541/1581 IRQ envelopes persist this
+latch, including nested drive checkpoints. Preserve old state files for
+rollback; old plugins cannot read the new machine envelopes.
+
 ## uPD765A behaviour used by real CPC/+3 firmware (`crates/chips/nec765`, 2026-09-29)
 
 Where the datasheet leaves open what real CPC/+3 software depends on, the

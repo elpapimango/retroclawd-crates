@@ -43,6 +43,11 @@ pub struct Cpu {
     /// always taken regardless of `FLAG_I` (real NMI is non-maskable) --
     /// mirrors `z80::Cpu::nmi_pending`.
     pub(crate) nmi_pending: bool,
+
+    // Keep the published register serialization intact. Machine state writers
+    // persist this separately in their versioned envelope; see irq_poll_mask().
+    #[serde(skip)]
+    irq_poll_mask: Option<bool>,
 }
 
 impl Default for Cpu {
@@ -57,6 +62,7 @@ impl Default for Cpu {
             halted: false,
             irq_pending: false,
             nmi_pending: false,
+            irq_poll_mask: None,
         }
     }
 }
@@ -99,6 +105,7 @@ impl Cpu {
             "P" | "SR" => {
                 let p = parse_u8("P")?;
                 self.p = (p | FLAG_U) & !FLAG_B;
+                self.irq_poll_mask = None;
             }
             _ => return Err(format!("unknown register {name:?}")),
         }
@@ -118,10 +125,25 @@ impl Cpu {
         self.halted = false;
         self.irq_pending = false;
         self.nmi_pending = false;
+        self.irq_poll_mask = None;
+    }
+
+    /// The I flag sampled before the last CLI, SEI or PLP, if applicable.
+    /// The legacy `Cpu` serde layout excludes this latch. A machine must
+    /// save it in its versioned state envelope and restore it along with
+    /// the CPU for exact continuation. Old states restore `None`, since
+    /// their instruction-boundary IRQ check used the live I flag.
+    pub fn irq_poll_mask(&self) -> Option<bool> {
+        self.irq_poll_mask
+    }
+
+    pub fn restore_irq_poll_mask(&mut self, mask: Option<bool>) {
+        self.irq_poll_mask = mask;
     }
 
     /// Raises this CPU's maskable IRQ line. Only actually taken once
-    /// `step()` next checks it and `FLAG_I` is clear, same "request now,
+    /// `step()` next checks it and the sampled I flag is clear (CLI/SEI/PLP
+    /// use their previous I flag), same "request now,
     /// take at the next instruction boundary" shape as
     /// `z80::Cpu::request_interrupt`.
     pub fn request_irq(&mut self) {
@@ -230,6 +252,7 @@ impl Cpu {
     /// underlying chip calls them" -- the 6502 datasheet itself says
     /// "cycles", not T-states).
     pub fn step<B: Bus>(&mut self, bus: &mut B) -> u32 {
+        let irq_masked = self.irq_poll_mask.take().unwrap_or(self.p & FLAG_I != 0);
         if self.nmi_pending {
             self.nmi_pending = false;
             self.halted = false;
@@ -237,7 +260,7 @@ impl Cpu {
         }
         if self.irq_pending {
             self.irq_pending = false;
-            if self.p & FLAG_I == 0 {
+            if !irq_masked {
                 self.halted = false;
                 return self.interrupt_sequence(bus, IRQ_VECTOR);
             }
@@ -250,7 +273,16 @@ impl Cpu {
             return 2;
         }
         let opcode = self.fetch(bus);
-        self.execute(opcode, bus)
+        let old_i = self.p & FLAG_I != 0;
+        let cycles = self.execute(opcode, bus);
+        // Altirra Hardware Reference, chapter 3, "Clearing/Setting the I
+        // flag with an interrupt pending": CLI/SEI/PLP change I after the
+        // poll; RTI restores it early enough for the same instruction.
+        // https://www.virtualdub.org/downloads/Altirra%20Hardware%20Reference%20Manual.pdf
+        if matches!(opcode, 0x58 | 0x78 | 0x28) {
+            self.irq_poll_mask = Some(old_i);
+        }
+        cycles
     }
 }
 

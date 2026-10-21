@@ -50,6 +50,91 @@ impl Bus for TraceBus {
 
 const CODE: u16 = 0x0200;
 
+#[test]
+fn irq_poll_uses_old_i_for_cli_sei_and_plp_but_restored_i_for_rti() {
+    for opcode in [0x58, 0x28] {
+        let mut bus = TraceBus::new(0xea);
+        bus.mem[CODE as usize] = opcode;
+        bus.mem[0x01fe] = 0x20;
+        bus.mem[0xfffe..=0xffff].copy_from_slice(&[0x00, 0x40]);
+        let mut cpu = Cpu::new();
+        cpu.pc = CODE;
+        cpu.request_irq();
+        cpu.step(&mut bus);
+        cpu.request_irq();
+        assert_eq!(cpu.step(&mut bus), 2, "opcode {opcode:02x} must defer IRQ");
+        assert_eq!(cpu.pc, CODE + 2);
+        cpu.request_irq();
+        bus.events.clear();
+        assert_eq!(cpu.step(&mut bus), 7);
+        assert_eq!(cpu.pc, 0x4000);
+        assert_eq!(bus.events.len(), 7);
+    }
+
+    for opcode in [0x78, 0x28] {
+        let mut bus = TraceBus::new(0xea);
+        bus.mem[CODE as usize..CODE as usize + 2].copy_from_slice(&[0x58, opcode]);
+        bus.mem[0x01fe] = 0x24;
+        bus.mem[0xfffe..=0xffff].copy_from_slice(&[0x00, 0x40]);
+        let mut cpu = Cpu::new();
+        cpu.pc = CODE;
+        cpu.request_irq();
+        cpu.step(&mut bus);
+        cpu.request_irq();
+        cpu.step(&mut bus);
+        assert_eq!(cpu.pc, CODE + 2, "CLI must allow SEI/PLP to execute");
+        cpu.request_irq();
+        assert_eq!(cpu.step(&mut bus), 7);
+        assert_eq!(cpu.pc, 0x4000);
+        assert_eq!(
+            bus.mem[0x0100 | cpu.sp.wrapping_add(1) as usize] & 0x14,
+            0x04
+        );
+    }
+
+    let mut bus = TraceBus::new(0xea);
+    bus.mem[CODE as usize] = 0x40;
+    bus.mem[0x01fe] = 0x20;
+    bus.mem[0x01ff] = 0x00;
+    bus.mem[0x0100] = 0x30;
+    bus.mem[0xfffe..=0xffff].copy_from_slice(&[0x00, 0x40]);
+    let mut cpu = Cpu::new();
+    cpu.pc = CODE;
+    cpu.request_irq();
+    assert_eq!(cpu.step(&mut bus), 6);
+    assert_eq!(cpu.pc, 0x3000);
+    cpu.request_irq();
+    assert_eq!(cpu.step(&mut bus), 7);
+    assert_eq!(cpu.pc, 0x4000);
+    assert_eq!(bus.mem[0x01fe] & 0x14, 0);
+}
+
+#[test]
+fn reset_nmi_and_status_edits_discard_a_previous_unmasked_irq_poll() {
+    for action in ["reset", "nmi", "P", "SR"] {
+        let mut bus = TraceBus::new(0xea);
+        bus.mem[CODE as usize] = 0x78;
+        let mut cpu = Cpu::new();
+        cpu.pc = CODE;
+        cpu.p = 0x20;
+        cpu.step(&mut bus);
+        match action {
+            "reset" => cpu.reset(&mut bus),
+            "nmi" => {
+                cpu.request_nmi();
+                assert_eq!(cpu.step(&mut bus), 7);
+            }
+            register => cpu.set_register(register, 0x24).unwrap(),
+        }
+        cpu.request_irq();
+        assert_eq!(
+            cpu.step(&mut bus),
+            2,
+            "{action} must use its current I flag"
+        );
+    }
+}
+
 /// Runs one instruction at `CODE` and returns (cycles, events).
 fn run(opcode: u8, fill: u8, xy: u8, p: u8, sp: u8) -> (u32, Vec<Ev>) {
     let mut bus = TraceBus::new(fill);
