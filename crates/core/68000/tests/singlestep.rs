@@ -4,13 +4,15 @@
 //!
 //! The files are not committed (the repository states no licence): `scripts/fetch_singlesteptests.sh` downloads them
 //! into `tests/sst/`; without them every test here prints a note and passes. `RC_SST_DIR` points elsewhere,
-//! `RC_SST_BUS=1` also compares the bus transactions, `RC_SST_PRINT=1` prints every failure as a baseline line.
-//! A failure listed in `sst_baseline.txt` (`<test name><TAB><reason>`) is allowed; any other one fails the test.
+//! `RC_SST_BUS=1` also compares the bus transactions, `RC_SST_PRINT=1` prints every failure.
+//! The failures are an explicit list, `EXPECTED` (file, reason, count; the reasons and their sources are in
+//! `singlestep-expected.md`): a file fails if any other case fails, or if a listed count changes, so a listed case
+//! that starts passing fails it too.
 
 use flate2::read::GzDecoder;
 use mc68000::{BusFault, Cpu, FunctionCode, IackResponse, M68kBus, Size};
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Deserialize)]
@@ -289,12 +291,34 @@ fn dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/sst"))
 }
 
-fn baseline() -> HashSet<String> {
-    let text = include_str!("sst_baseline.txt");
-    text.lines()
-        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
-        .map(|l| l.split('\t').next().unwrap_or("").to_string())
-        .collect()
+/// Why a case is allowed to fail (`singlestep-expected.md` gives each one's source).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Expected {
+    /// ASR by a register count larger than the operand size, negative operand: the data has C = X = 0, the PRM 1.
+    AsrCarry,
+    /// Bad test data upstream (https://github.com/SingleStepTests/680x0/issues/4).
+    BadUpstream,
+}
+
+/// Every failure the suite is expected to have: file, reason, number of cases.
+const EXPECTED: &[(&str, Expected, usize)] = &[
+    ("ASL.b", Expected::BadUpstream, 2),
+    ("ASR.b", Expected::AsrCarry, 1642),
+    ("ASR.w", Expected::AsrCarry, 1063),
+    ("ASR.l", Expected::AsrCarry, 1031),
+];
+
+/// The cases of issue #4: a byte shift whose expected D2 has changed upper bytes.
+const BAD_UPSTREAM: &[&str] = &["e502 [ASL.b Q, D2] 1583", "e502 [ASL.b Q, D2] 1761"];
+
+fn classify(case: &Case, diff: &str) -> Option<Expected> {
+    if BAD_UPSTREAM.contains(&case.name.as_str()) {
+        Some(Expected::BadUpstream)
+    } else if known_disagreement(case, diff) {
+        Some(Expected::AsrCarry)
+    } else {
+        None
+    }
 }
 
 fn run_file(file: &str) {
@@ -309,18 +333,19 @@ fn run_file(file: &str) {
     let cases: Vec<Case> = serde_json::from_reader(GzDecoder::new(f)).expect("parse test file");
     let compare_bus = std::env::var_os("RC_SST_BUS").is_some();
     let print = std::env::var_os("RC_SST_PRINT").is_some();
-    let allowed = baseline();
     let started = std::time::Instant::now();
     let mut unexpected = Vec::new();
     let mut failed = 0;
+    let mut counts: HashMap<Expected, usize> = HashMap::new();
     for case in &cases {
         if let Err(diff) = run(case, compare_bus) {
             failed += 1;
             if print {
                 println!("{}\t{}", case.name, diff);
             }
-            if !allowed.contains(&case.name) && !known_disagreement(case, &diff) {
-                unexpected.push(format!("{}: {}", case.name, diff));
+            match classify(case, &diff) {
+                Some(reason) => *counts.entry(reason).or_default() += 1,
+                None => unexpected.push(format!("{}: {}", case.name, diff)),
             }
         }
     }
@@ -340,6 +365,18 @@ fn run_file(file: &str) {
             .cloned()
             .collect::<Vec<_>>()
             .join("\n  ")
+    );
+    let mut want: Vec<(Expected, usize)> = EXPECTED
+        .iter()
+        .filter(|(f, _, _)| *f == file)
+        .map(|&(_, r, n)| (r, n))
+        .collect();
+    let mut got: Vec<(Expected, usize)> = counts.into_iter().collect();
+    want.sort_by_key(|&(r, _)| r as u8);
+    got.sort_by_key(|&(r, _)| r as u8);
+    assert_eq!(
+        got, want,
+        "{file}: the expected failures changed (EXPECTED, singlestep-expected.md)"
     );
 }
 

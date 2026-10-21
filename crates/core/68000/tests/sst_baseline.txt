@@ -1,3 +1,0 @@
-# SingleStepTests failures allowed: <test name><TAB><reason>. Only cases whose data is known to be wrong.
-e502 [ASL.b Q, D2] 1583	bad test data, upstream https://github.com/SingleStepTests/680x0/issues/4 (a byte shift changes the upper bytes of D2)
-e502 [ASL.b Q, D2] 1761	bad test data, upstream https://github.com/SingleStepTests/680x0/issues/4
