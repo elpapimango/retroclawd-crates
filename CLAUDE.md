@@ -4,7 +4,7 @@ Guidance for Claude Code (claude.ai/code) working in this repo.
 
 ## What this repository is
 
-The shared crates of retroclawd (see README.md): `machine`, `plugin-api`, the `z80` and `mos6502` cores, `ay-3-8910`, `nec765`, `dsk`, `zx-tape`. No machine and no application code. The application (`elpapimango/retroclawd`) uses this repository as a submodule; the machine repositories pin it by git revision. The plugin ABI rules are in `docs/plugin-abi.md`: read them before changing `plugin-api`.
+The shared crates of retroclawd (see README.md): `machine`, `plugin-api`, the `z80`, `mos6502` and `mc68000` cores, `ay-3-8910`, `mc6850`, `nec765`, `wd1770`, `dsk`, `zx-tape`. No machine and no application code. The application (`elpapimango/retroclawd`) uses this repository as a submodule; the machine repositories pin it by git revision. The plugin ABI rules are in `docs/plugin-abi.md`: read them before changing `plugin-api`.
 
 ## Commands
 
@@ -57,6 +57,16 @@ Written in the pre-split repository; mentions of `zx-spectrum`, `c64`, `retrocla
   the one pattern table decoding and disassembly share. Conformance: `tests/singlestep.rs` (SingleStepTests 68000/v1,
   fetched by `scripts/fetch_singlesteptests.sh`, never committed), `tests/exceptions.rs`, `tests/disassemble.rs`,
   `tests/differential.rs` (`--ignored`, against `m68k` 0.14.6). See CREDITS.md for the numbers.
+- **`ay-3-8910` YM2149 variant (2026-10-21)** — `Variant::Ym2149` (`with_variant`, `set_variant`): Table 4 envelope
+  shapes with the 5-bit level and the Fig. 1 D/A curve of Yamaha's catalog (CREDITS). The variant is configuration and
+  never serialized (`#[serde(skip)]`): the Spectrum and CPC save their AY in bincode, so a new field would break their
+  `.state` files. The AY path is unchanged (including its known envelope hold bug for shapes 1101/1111).
+- **`mc6850`** (2026-10-21) — Motorola ACIA from the data sheet; no clock inside: the host times characters from
+  `frame_bits() × divide()` and calls `start_tx`/`take_tx`/`rx_byte`. Used by the Atari ST.
+- **`wd1770`** (moved from retroclawd-commodore 2026-10-21) — WD1770/1772 against a `Floppy` trait; the C64's 1581 and
+  the Atari ST (WD1772) use it. Two data-sheet corrections since the move: Type I sets S5 once the spin-up phase is
+  over, and Force Interrupt keeps MO (and a running command's status). Its behaviour tests are the 1581's in
+  retroclawd-commodore plus `tests/type1.rs`.
 - **`ay-3-8910`** — emulates the General Instrument AY-3-8910 PSG (3 tone
   channels sharing one noise generator + one envelope generator), used by
   the Spectrum 128K/+2/+3, Amstrad CPC, MSX, and many arcade boards --
