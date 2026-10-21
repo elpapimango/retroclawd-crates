@@ -73,3 +73,80 @@ fn force_interrupt_during_a_command_keeps_the_rest_of_the_status() {
     fdc.tick(1000);
     assert_eq!(fdc.read(0), before & !0x01);
 }
+
+/// A disk whose ID field carries a size code beyond the data sheet's table (`$FF`): the controller uses the low two
+/// bits (the table lists 00-03), so a hostile image cannot make it panic.
+struct OneSector {
+    track: Vec<u16>,
+    pos: usize,
+}
+
+impl OneSector {
+    fn new(size_code: u8) -> Self {
+        let crc = |bytes: &[u8]| bytes.iter().fold(0xFFFFu16, |c, &b| wd1770::crc_byte(c, b));
+        let mut t: Vec<u16> = vec![0x4E; 40];
+        t.extend([0u16; 12]);
+        let id = [0xA1, 0xA1, 0xA1, 0xFE, 0, 0, 1, size_code];
+        let c = crc(&id);
+        t.extend([0x1A1; 3]);
+        t.extend(id[3..].iter().map(|&b| b as u16));
+        t.extend([c >> 8, c & 0xFF]);
+        t.extend(vec![0x4E; 22]);
+        t.extend([0u16; 12]);
+        let mut data = vec![0xA1, 0xA1, 0xA1, 0xFB];
+        data.extend(vec![0x5A; 1024]);
+        let c = crc(&data);
+        t.extend([0x1A1; 3]);
+        t.extend(data[3..].iter().map(|&b| b as u16));
+        t.extend([c >> 8, c & 0xFF]);
+        t.resize(6250, 0x4E);
+        Self { track: t, pos: 0 }
+    }
+}
+
+impl Floppy for OneSector {
+    fn index(&self) -> bool {
+        self.pos < 64
+    }
+    fn index_count(&self) -> u32 {
+        0
+    }
+    fn index_count_reset(&mut self) {}
+    fn rotate(&mut self, bytes: u64) {
+        self.pos = ((self.pos as u64 + bytes) % self.track.len() as u64) as usize;
+    }
+    fn track0(&self) -> bool {
+        true
+    }
+    fn write_protect(&self) -> bool {
+        true
+    }
+    fn seek_pulse(&mut self, _: bool) {}
+    fn read(&mut self) -> u16 {
+        let b = self.track[self.pos];
+        self.rotate(1);
+        b
+    }
+    fn write(&mut self, _: u16) {
+        self.rotate(1);
+    }
+}
+
+#[test]
+fn a_size_code_beyond_the_table_uses_its_low_two_bits() {
+    let mut fdc = Wd1770::new(OneSector::new(0xFF), 8, true);
+    fdc.write(2, 1);
+    fdc.write(0, 0x88); // READ SECTOR, motor on
+    let mut bytes = 0;
+    for _ in 0..20_000 {
+        fdc.tick(256);
+        if fdc.drq() {
+            fdc.read(3);
+            bytes += 1;
+        }
+        if fdc.intrq() {
+            break;
+        }
+    }
+    assert_eq!(bytes, 1024, "size code $FF read as 3 (1024 bytes)");
+}

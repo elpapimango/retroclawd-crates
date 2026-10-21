@@ -620,7 +620,8 @@ impl<F: Floppy> Wd1770<F> {
                         continue;
                     }
                     if self.st.byte_count == 3 {
-                        self.st.tmp = u32::from(res as u8);
+                        // WD177X-00 sector length table: codes 00-03 (128-1024 bytes); only the low two bits count.
+                        self.st.tmp = u32::from(res as u8 & 3);
                     }
                     self.st.crc = crc_byte(self.st.crc, res as u8);
                     self.st.byte_count -= 1;
