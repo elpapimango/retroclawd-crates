@@ -177,3 +177,10 @@ Written from the manuals; no code, table or comment of another core is copied.
   overflow) or give no bus order around a fault, the core follows this data.
 - `m68k` 0.14.6 (https://github.com/benletchford/m68k-rs, MIT): a dev-dependency of `tests/differential.rs` only,
   an independent oracle for random instructions. It is never linked into the core or a machine.
+
+## MC6850 ACIA (`crates/chips/mc6850`, 2026-10-21)
+
+From Motorola's MC6850 data sheet (DS9493R, 1985; copy at
+https://docs.ampnuts.ru/eevblog.docs/Tektronix/TLA_Ensoniq/Datasheets/MC6850.pdf, SHA-256
+`294a8b9f557d03a2a7f4d736d060244f39216dad2d5479d2e47954feb4f34655`): control register, status register, master
+reset, transmit/receive sequences, CTS/DCD behaviour.
