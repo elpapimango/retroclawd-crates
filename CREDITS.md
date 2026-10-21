@@ -130,6 +130,20 @@ cited "NMOS 6510 Unintended Opcodes" reference by Groepaz/Hitmen. This is
 useful deterministic emulation, not a claim that temperature- and
 chip-dependent silicon behavior has one exact answer.
 
+Acid800 1.2 (Avery Lee, MIT; privately executed, not committed) exposed an
+incorrect SHY page-crossing store. SHY/SHX/SHA/TAS now mask with the
+**unindexed** base high byte plus one and replace the destination high byte
+with the masked data when indexing carries. Existing indexed dummy reads
+and cycle counts are preserved. Sources: Altirra Hardware Reference
+2026-01-02, chapter 3, and Atari800 7.2.1's independently implemented
+[`src/cpu.c`](https://github.com/atari800/atari800/blob/63a381884175e3cbfc745ff00dfb3d70d928eb50/src/cpu.c)
+opcodes `$93/$9B/$9C/$9E/$9F`. The latter explicitly selects high-byte-plus-one
+for SHA; the manual describes variant SHA masking and warns of instability.
+This is a specified deterministic common case, not a universal silicon claim.
+The regression covers the actual Acid800 SHY failure, all five opcodes,
+non-crossing and crossing stores, zero-page pointer wrap, 16-bit address
+wrap, unchanged flags/registers, TAS's stack update and exact final bus events.
+
 ## uPD765A behaviour used by real CPC/+3 firmware (`crates/chips/nec765`, 2026-09-29)
 
 Where the datasheet leaves open what real CPC/+3 software depends on, the

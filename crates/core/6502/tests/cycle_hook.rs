@@ -197,6 +197,53 @@ fn zero_page_indexing_reads_the_unindexed_byte() {
 }
 
 #[test]
+fn high_byte_stores_mask_the_base_and_corrupt_the_write_address_on_carry() {
+    for opcode in [0x9c, 0x9e, 0x9f, 0x93, 0x9b] {
+        for (base, index, source, target, value) in [
+            (0x3fceu16, 0xffu8, 0xbfu8, 0x00cdu16, 0x00u8),
+            (0x3fce, 0xff, 0xff, 0x40cd, 0x40),
+            (0x12f0, 0x20, 0x01, 0x0110, 0x01),
+            (0x12e0, 0x1f, 0xbf, 0x12ff, 0x13),
+            (0xfff0, 0x20, 0xff, 0x0010, 0x00),
+        ] {
+            let mut bus = TraceBus::new(0xaa);
+            bus.mem[CODE as usize] = opcode;
+            if opcode == 0x93 {
+                bus.mem[CODE as usize + 1] = 0xff;
+                bus.mem[0xff] = base as u8;
+                bus.mem[0] = (base >> 8) as u8;
+            } else {
+                bus.mem[CODE as usize + 1..CODE as usize + 3].copy_from_slice(&base.to_le_bytes());
+            }
+            let mut cpu = Cpu::new();
+            cpu.pc = CODE;
+            cpu.a = 0xff;
+            cpu.x = if opcode == 0x9c { index } else { source };
+            cpu.y = if opcode == 0x9c { source } else { index };
+            cpu.p = 0xeb;
+            let cycles = cpu.step(&mut bus);
+            let indexed = base.wrapping_add(u16::from(index));
+            assert_eq!(
+                &bus.events[bus.events.len() - 2..],
+                &[
+                    Ev::DummyRead((base & 0xff00) | (indexed & 0xff)),
+                    Ev::Write(target, value),
+                ],
+                "opcode {opcode:02x}, base {base:04x}, index {index:02x}, source {source:02x}"
+            );
+            assert_eq!(cycles, if opcode == 0x93 { 6 } else { 5 });
+            assert_eq!(bus.events.len() as u32, cycles);
+            assert_eq!(bus.mem[usize::from(target)], value);
+            assert_eq!(cpu.a, 0xff);
+            assert_eq!(cpu.x, if opcode == 0x9c { index } else { source });
+            assert_eq!(cpu.y, if opcode == 0x9c { source } else { index });
+            assert_eq!(cpu.p, 0xeb);
+            assert_eq!(cpu.sp, if opcode == 0x9b { source } else { 0xfd });
+        }
+    }
+}
+
+#[test]
 fn stack_instructions_follow_the_real_cycle_order() {
     // JSR $1234: opcode, lo, stack read, push PCH, push PCL, hi.
     let mut bus = TraceBus::new(0x00);
