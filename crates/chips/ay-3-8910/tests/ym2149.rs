@@ -108,16 +108,17 @@ fn ym_dac_follows_fig_1() {
     assert_eq!(ym.output(), 0.0);
 }
 
+/// The variant is configuration, not state: it is never serialized, so the save states machines already wrote with
+/// a non-self-describing format (bincode, in the Spectrum and CPC) keep their layout. The owner re-applies it with
+/// `set_variant` after loading.
 #[test]
-fn variant_survives_serde() {
-    let ym = Ay3_8910::with_variant(Variant::Ym2149);
-    let json = serde_json::to_string(&ym).unwrap();
-    let back: Ay3_8910 = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.variant(), Variant::Ym2149);
-
-    // A state saved before the variant existed has no field: it is an AY.
-    let mut old: serde_json::Value = serde_json::to_value(Ay3_8910::new()).unwrap();
-    old.as_object_mut().unwrap().remove("variant");
-    let back: Ay3_8910 = serde_json::from_value(old).unwrap();
+fn variant_is_not_serialized() {
+    let ay = serde_json::to_value(Ay3_8910::new()).unwrap();
+    let ym = serde_json::to_value(Ay3_8910::with_variant(Variant::Ym2149)).unwrap();
+    assert!(ay.get("variant").is_none(), "{ay}");
+    assert_eq!(ay, ym, "an AY and a YM in the same state serialize alike");
+    let mut back: Ay3_8910 = serde_json::from_value(ym).unwrap();
     assert_eq!(back.variant(), Variant::Ay38910);
+    back.set_variant(Variant::Ym2149);
+    assert_eq!(back.variant(), Variant::Ym2149);
 }

@@ -304,8 +304,10 @@ pub struct Ay3_8910 {
     /// per host machine, most of which don't wire anything meaningful to
     /// them at all).
     io_ports: [u8; 2],
-    /// AY-3-8910 or YM2149; states saved before the field existed are AYs.
-    #[serde(default)]
+    /// AY-3-8910 or YM2149: configuration, not state. Never serialized, so the save states machines write with
+    /// non-self-describing formats (bincode) keep their layout; a loaded chip is an AY until its owner calls
+    /// `set_variant`.
+    #[serde(skip)]
     variant: Variant,
 }
 
@@ -346,6 +348,11 @@ impl Ay3_8910 {
 
     pub fn variant(&self) -> Variant {
         self.variant
+    }
+
+    /// Re-applies the chip's variant, e.g. after loading a saved state (which does not carry it).
+    pub fn set_variant(&mut self, variant: Variant) {
+        self.variant = variant;
     }
 
     /// The envelope generator's current level: 0-31 on the YM2149 (E4-E0), 0-15 on the AY-3-8910.
