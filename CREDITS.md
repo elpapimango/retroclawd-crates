@@ -161,6 +161,21 @@ Atari 800 v3, VIC-20 v5 and the C64/C128/1541/1581 IRQ envelopes persist this
 latch, including nested drive checkpoints. Preserve old state files for
 rollback; old plugins cannot read the new machine envelopes.
 
+BRK/IRQ vector selection now permits a cycle-clocked Bus NMI edge to hijack
+the sequence after cycle 4, before the status push. Sources:
+[NESdev CPU interrupts, "Interrupt hijacking"](https://www.nesdev.org/wiki/CPU_interrupts#Interrupt_hijacking)
+(including the Visual6502-derived tick sequence), and Altirra Hardware
+Reference chapter 3, "Overlapping interrupts". Both stack frames and seven
+bus cycles remain unchanged: BRK still pushes PC+2 and B=1; IRQ pushes the
+interrupted PC and B=0. Tests place the edge after each of the seven cycles,
+checking vector reads, stack contents and retention of late edges.
+`Bus::take_nmi_edge` defaults to false, so existing instruction-boundary
+callers retain their behavior. No CPU field, serde layout or Plugin ABI
+changes. A connected Bus owns and persists unconsumed edges; Atari's existing
+Hardware State already does so. This is not a complete interrupt pipeline:
+consecutive-interrupt inhibition, detector latency and taken-branch timing
+remain outside this increment.
+
 ## uPD765A behaviour used by real CPC/+3 firmware (`crates/chips/nec765`, 2026-09-29)
 
 Where the datasheet leaves open what real CPC/+3 software depends on, the

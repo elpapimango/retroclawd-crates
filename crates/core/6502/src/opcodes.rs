@@ -335,11 +335,12 @@ impl Cpu {
         bus.dummy_cycle(self.pc, false, 0);
         self.pc = self.pc.wrapping_add(1);
         self.push_u16(bus, self.pc);
+        let vector = Self::irq_vector(bus);
         self.push(bus, self.p | FLAG_U | FLAG_B);
         self.p |= crate::cpu::FLAG_I;
         self.pc = {
-            let lo = bus.read(0xFFFE) as u16;
-            let hi = bus.read(0xFFFF) as u16;
+            let lo = bus.read(vector) as u16;
+            let hi = bus.read(vector + 1) as u16;
             lo | (hi << 8)
         };
         7

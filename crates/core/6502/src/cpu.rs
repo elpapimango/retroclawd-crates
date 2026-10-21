@@ -229,6 +229,16 @@ impl Cpu {
         lo | (hi << 8)
     }
 
+    pub(crate) fn irq_vector<B: Bus>(bus: &mut B) -> u16 {
+        // https://www.nesdev.org/wiki/CPU_interrupts#Interrupt_hijacking:
+        // select after cycle 4, before pushing P; BRK retains its B flag.
+        if bus.take_nmi_edge() {
+            NMI_VECTOR
+        } else {
+            IRQ_VECTOR
+        }
+    }
+
     /// Real 7-cycle NMI/IRQ sequence: pushes `PC` then `P` (with `FLAG_B`
     /// clear -- only BRK's own pushed byte ever has it set, the real
     /// distinction between a software and hardware break the 6502's IRQ
@@ -240,6 +250,11 @@ impl Cpu {
         bus.dummy_cycle(self.pc, false, 0);
         bus.dummy_cycle(self.pc, false, 0);
         self.push_u16(bus, self.pc);
+        let vector = if vector == IRQ_VECTOR {
+            Self::irq_vector(bus)
+        } else {
+            vector
+        };
         self.push(bus, (self.p | FLAG_U) & !FLAG_B);
         self.p |= FLAG_I;
         self.pc = Self::read_vector(bus, vector);

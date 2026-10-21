@@ -51,6 +51,73 @@ impl Bus for TraceBus {
 const CODE: u16 = 0x0200;
 
 #[test]
+fn nmi_hijacks_brk_and_irq_only_before_the_status_push() {
+    struct NmiBus {
+        trace: TraceBus,
+        edge_at: usize,
+        pending: bool,
+    }
+    impl NmiBus {
+        fn tick(&mut self) {
+            self.pending |= self.trace.events.len() == self.edge_at;
+        }
+    }
+    impl Bus for NmiBus {
+        fn read(&mut self, addr: u16) -> u8 {
+            let value = self.trace.read(addr);
+            self.tick();
+            value
+        }
+        fn write(&mut self, addr: u16, value: u8) {
+            self.trace.write(addr, value);
+            self.tick();
+        }
+        fn dummy_cycle(&mut self, addr: u16, write: bool, value: u8) {
+            self.trace.dummy_cycle(addr, write, value);
+            self.tick();
+        }
+        fn take_nmi_edge(&mut self) -> bool {
+            std::mem::take(&mut self.pending)
+        }
+    }
+    for brk in [true, false] {
+        for edge_at in 1..=7 {
+            let mut bus = NmiBus {
+                trace: TraceBus::new(0xea),
+                edge_at,
+                pending: false,
+            };
+            bus.trace.mem[CODE as usize] = 0x00;
+            bus.trace.mem[0xfffa..=0xfffb].copy_from_slice(&[0x00, 0x40]);
+            bus.trace.mem[0xfffe..=0xffff].copy_from_slice(&[0x00, 0x50]);
+            let mut cpu = Cpu::new();
+            cpu.pc = CODE;
+            cpu.p = 0x20;
+            if !brk {
+                cpu.request_irq();
+            }
+            assert_eq!(cpu.step(&mut bus), 7);
+            let hijacked = edge_at <= 4;
+            assert_eq!(
+                cpu.pc,
+                if hijacked { 0x4000 } else { 0x5000 },
+                "BRK={brk}, NMI after cycle {edge_at}"
+            );
+            assert_eq!(bus.trace.events.len(), 7);
+            assert_eq!(bus.trace.mem[0x01fd], 0x02);
+            assert_eq!(bus.trace.mem[0x01fc], if brk { 0x02 } else { 0x00 });
+            assert_eq!(bus.trace.mem[0x01fb], if brk { 0x30 } else { 0x20 });
+            let vector = if hijacked { 0xfffa } else { 0xfffe };
+            assert_eq!(
+                &bus.trace.events[5..],
+                &[Ev::Read(vector), Ev::Read(vector + 1)]
+            );
+            assert_eq!(bus.pending, !hijacked, "late NMI must remain pending");
+        }
+    }
+}
+
+#[test]
 fn irq_poll_uses_old_i_for_cli_sei_and_plp_but_restored_i_for_rti() {
     for opcode in [0x58, 0x28] {
         let mut bus = TraceBus::new(0xea);
