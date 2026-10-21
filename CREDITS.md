@@ -21,6 +21,12 @@ attributed to one specific source the way the file-format work above is,
 since this is closer to "how the chip works" than "one project's specific
 choice."
 
+The YM2149 variant (`Variant::Ym2149`, 2026-10-21) follows Yamaha's YM2149 catalog, September 1992
+(https://bitsavers.org/components/yamaha/YM2149_199209.pdf, SHA-256
+`a4b946bf525fc1a7c6dec9e7662ce2342d3a3c627f980c7c3b1a396df7e91d20`): the envelope shapes of Table 4, 32 envelope
+steps per period (`fE = fMaster / 256 EP`), and the D/A converter levels of Fig. 1 (each step 2^(-1/4) below the
+next, fixed level L at envelope step 2L + 1).
+
 ## ZX Spectrum tape formats (`crates/zx-tape`)
 
 Standard ROM tape-loading pulse timings (pilot pulse 2168 T-states, 8063
