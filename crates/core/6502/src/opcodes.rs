@@ -337,6 +337,7 @@ impl Cpu {
         self.push_u16(bus, self.pc);
         let vector = Self::irq_vector(bus);
         self.push(bus, self.p | FLAG_U | FLAG_B);
+        bus.interrupt_status_pushed();
         self.p |= crate::cpu::FLAG_I;
         self.pc = {
             let lo = bus.read(vector) as u16;

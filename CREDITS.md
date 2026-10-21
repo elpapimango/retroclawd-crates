@@ -176,6 +176,11 @@ Hardware State already does so. This is not a complete interrupt pipeline:
 consecutive-interrupt inhibition, detector latency and taken-branch timing
 remain outside this increment.
 
+The optional `Bus::interrupt_status_pushed` callback marks cycle 5 without
+adding a CPU field or clock. It lets Atari model the short ANTIC NMI pulse
+being lost when it overlaps interrupt acknowledgment (Altirra Hardware
+Reference section 4.8, "Missed NMIs"). Other buses retain the no-op default.
+
 ## uPD765A behaviour used by real CPC/+3 firmware (`crates/chips/nec765`, 2026-09-29)
 
 Where the datasheet leaves open what real CPC/+3 software depends on, the

@@ -72,6 +72,12 @@ pub trait Bus {
         false
     }
 
+    /// Marks completion of the status write in a 6502 interrupt sequence.
+    /// A bus with a short NMI pulse can model its overlap with interrupt
+    /// acknowledgment here. This does not advance the bus clock.
+    #[inline]
+    fn interrupt_status_pushed(&mut self) {}
+
     /// Called by a CPU core's I/O funnel right after every `IN`
     /// (`write == false`, `value` is the byte the CPU received) and `OUT`
     /// (`write == true`, `value` is the byte it sent). The hook the

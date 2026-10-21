@@ -56,6 +56,7 @@ fn nmi_hijacks_brk_and_irq_only_before_the_status_push() {
         trace: TraceBus,
         edge_at: usize,
         pending: bool,
+        status_push: usize,
     }
     impl NmiBus {
         fn tick(&mut self) {
@@ -79,6 +80,9 @@ fn nmi_hijacks_brk_and_irq_only_before_the_status_push() {
         fn take_nmi_edge(&mut self) -> bool {
             std::mem::take(&mut self.pending)
         }
+        fn interrupt_status_pushed(&mut self) {
+            self.status_push = self.trace.events.len();
+        }
     }
     for brk in [true, false] {
         for edge_at in 1..=7 {
@@ -86,6 +90,7 @@ fn nmi_hijacks_brk_and_irq_only_before_the_status_push() {
                 trace: TraceBus::new(0xea),
                 edge_at,
                 pending: false,
+                status_push: 0,
             };
             bus.trace.mem[CODE as usize] = 0x00;
             bus.trace.mem[0xfffa..=0xfffb].copy_from_slice(&[0x00, 0x40]);
@@ -104,6 +109,7 @@ fn nmi_hijacks_brk_and_irq_only_before_the_status_push() {
                 "BRK={brk}, NMI after cycle {edge_at}"
             );
             assert_eq!(bus.trace.events.len(), 7);
+            assert_eq!(bus.status_push, 5);
             assert_eq!(bus.trace.mem[0x01fd], 0x02);
             assert_eq!(bus.trace.mem[0x01fc], if brk { 0x02 } else { 0x00 });
             assert_eq!(bus.trace.mem[0x01fb], if brk { 0x30 } else { 0x20 });

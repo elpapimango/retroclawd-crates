@@ -256,6 +256,7 @@ impl Cpu {
             vector
         };
         self.push(bus, (self.p | FLAG_U) & !FLAG_B);
+        bus.interrupt_status_pushed();
         self.p |= FLAG_I;
         self.pc = Self::read_vector(bus, vector);
         7
