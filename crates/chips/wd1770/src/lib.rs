@@ -401,7 +401,7 @@ impl<F: Floppy> Wd1770<F> {
                     }
                     self.st.clk += self.prepare();
                     self.st.status |= BSY;
-                    self.st.status &= !(CRC_ERR | SE_RNF | IP_DRQ);
+                    self.st.status &= !(CRC_ERR | SE_RNF | IP_DRQ | SU_RT);
                     self.st.irq = false;
                     self.st.step = 1;
                 }
@@ -409,6 +409,9 @@ impl<F: Floppy> Wd1770<F> {
                     if !self.motor_on_wait() {
                         return None;
                     }
+                    // WD177X-00 status S5 on Type I: the spin-up sequence has completed (or was skipped: h = 1 or
+                    // the motor already on).
+                    self.st.status |= SU_RT;
                 }
                 3 => {
                     match self.st.command {
