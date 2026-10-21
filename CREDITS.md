@@ -184,3 +184,12 @@ From Motorola's MC6850 data sheet (DS9493R, 1985; copy at
 https://docs.ampnuts.ru/eevblog.docs/Tektronix/TLA_Ensoniq/Datasheets/MC6850.pdf, SHA-256
 `294a8b9f557d03a2a7f4d736d060244f39216dad2d5479d2e47954feb4f34655`): control register, status register, master
 reset, transmit/receive sequences, CTS/DCD behaviour.
+
+## WD1770/WD1772 floppy controller (`crates/chips/wd1770`, moved from retroclawd-commodore 2026-10-21)
+
+Moved unchanged from retroclawd-commodore `crates/chips/wd1770` (commit 77bef16), where it was written for the
+1581 drive: behaviour read from VICE (GPL, reference only, VICE-Team svn mirror) `drive/iec/wd1770.c` (command state
+machine, status bits, timing constants) and the WD1770 datasheet (command set). Its behaviour tests are the 1581
+tests in retroclawd-commodore. The Atari ST uses it as a WD1772, checked against Western Digital's WD177X-00 data
+sheet (*1986 Storage Management Products Handbook*, https://bitsavers.org/components/westernDigital/_dataBooks/,
+SHA-256 `72382885abfde5cdee875384aed7ca97c17112db047d7792d3a4b4d3ed0c895f`).
