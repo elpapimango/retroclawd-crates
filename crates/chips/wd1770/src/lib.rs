@@ -348,13 +348,19 @@ impl<F: Floppy> Wd1770<F> {
                         return;
                     }
                     self.st.clk += self.prepare();
-                    self.st.status &= BSY;
+                    // WD177X-00 "Status Register": during a command only Busy is reset and the rest is unchanged;
+                    // when idle the status is updated to Type I. MO is the motor output either way: it goes low only
+                    // after 9 idle revolutions, not on a Force Interrupt.
+                    let busy = self.st.status & BSY != 0;
+                    if !busy {
+                        self.st.status &= MO;
+                    }
                     if self.st.cmd & FLAG_I3 != 0 {
                         self.st.irq = true;
                     }
                     self.floppy.index_count_reset();
                     self.st.tmp = self.floppy.index_count();
-                    self.st.ty = if self.st.status & BSY != 0 { 0 } else { -1 };
+                    self.st.ty = if busy { 0 } else { -1 };
                     continue;
                 }
             };
