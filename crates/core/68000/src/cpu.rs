@@ -178,7 +178,9 @@ impl Cpu {
         self.run
     }
 
-    /// Drives IPL2-IPL0 (0 = no request, 7 = non-maskable).
+    /// Drives IPL2-IPL0 (0 = no request, 7 = non-maskable). The level is sampled once per `step`, before the
+    /// instruction's first fetch (UM 6.3.2: interrupts are recognised between instructions): the value set last
+    /// before the call decides, and a level raised and withdrawn again between two calls is never seen.
     pub fn set_ipl(&mut self, level: u8) {
         self.ipl = level & 7;
     }
