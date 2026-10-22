@@ -19,8 +19,14 @@ handshake/pulse/manual outputs and reset behavior: Avery Lee's
 [Altirra Hardware Reference Manual](https://www.virtualdub.org/downloads/Altirra%20Hardware%20Reference%20Manual.pdf),
 2026-01-02, sections 2.5 and 14.5, pages 34-36 and 453-456.
 This is a fresh implementation of documented hardware behavior, not a
-translation of an emulator. Machine-specific wiring, analogue floating-input
-decay and output-to-input spurious C2 interrupts are outside this implementation.
+translation of an emulator. Output-to-input spurious C2 interrupts follow
+section 2.5, "Spurious interrupts" (page 36); the handshake/pulse history
+distinction is checked against the MIT-licensed Acid800 1.2 `pia_irq.s`
+control-write sequences, not emulator implementation code. The new latent
+history uses a separate `PiaControlState` checkpoint to preserve the original
+serialized `Pia` layout; legacy restores start with empty history.
+Machine-specific wiring and analogue floating-input decay remain outside
+this implementation. These Chip tests do not establish an executed Acid800 pass.
 
 ## AY-3-8910 chip emulation (`crates/ay-3-8910`)
 

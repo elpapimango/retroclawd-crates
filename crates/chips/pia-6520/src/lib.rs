@@ -4,8 +4,9 @@
 //! Manual (2026-01-02), sections 2.5 and 14.5, pages 34-36 and 453-456:
 //! <https://www.virtualdub.org/downloads/Altirra%20Hardware%20Reference%20Manual.pdf>.
 //! `read`/`write` use A, CRA, B, CRB ordering; `*_alt` swap the address bits.
-//! A pulse lasts one caller-supplied clock. Analogue floating-input decay and
-//! output-to-input spurious C2 interrupts are not modeled.
+//! A pulse lasts one caller-supplied clock. Analogue floating-input decay is
+//! not modeled. Save `PiaControlState` alongside `Pia` to preserve C2 output
+//! history without changing the original serialized register/pin layout.
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
@@ -60,6 +61,41 @@ impl Side {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Pia {
     ports: [Port; 2],
+    #[serde(skip)]
+    control_state: PiaControlState,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum C2History {
+    #[default]
+    None,
+    Low,
+    Risen,
+}
+
+/// C2 transition history, stored separately to preserve the legacy `Pia` layout.
+/// Legacy restores without this checkpoint start with no pending transition.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PiaControlState {
+    history: [C2History; 2],
+}
+
+impl PiaControlState {
+    /// Check this extension against the register state before committing a restore.
+    pub fn validate(&self, pia: &Pia) -> Result<(), String> {
+        for (history, port) in self.history.iter().zip(&pia.ports) {
+            let mode = port.control >> 3;
+            let valid = match history {
+                C2History::None => true,
+                C2History::Low => matches!(mode, 4 | 6),
+                C2History::Risen => matches!(mode, 4 | 7),
+            };
+            if !valid {
+                return Err("invalid MOS 6520 PIA control history".to_string());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Pia {
@@ -69,6 +105,7 @@ impl Pia {
 
     /// Reset internal registers; external pin levels are board-owned.
     pub fn reset(&mut self) {
+        self.control_state = PiaControlState::default();
         for p in &mut self.ports {
             *p = Port {
                 input: p.input,
@@ -77,6 +114,21 @@ impl Pia {
                 ..Port::default()
             };
         }
+    }
+
+    pub fn save_control(&self) -> PiaControlState {
+        self.control_state.clone()
+    }
+
+    /// Legacy states do not contain C2 history; leave their registers/pins intact.
+    pub fn initialize_legacy_control(&mut self) {
+        self.control_state = PiaControlState::default();
+    }
+
+    pub fn restore_control(&mut self, state: &PiaControlState) -> Result<(), String> {
+        state.validate(self)?;
+        self.control_state = state.clone();
+        Ok(())
     }
 
     pub fn set_input(&mut self, side: Side, value: u8) {
@@ -169,6 +221,28 @@ impl Pia {
         let side = if offset & 2 == 0 { Side::A } else { Side::B };
         let p = &mut self.ports[side.index()];
         if offset & 1 != 0 {
+            // Altirra Hardware Reference 2.5, "Spurious interrupts" (p.36),
+            // and Acid800 1.2 pia_irq.s: handshake preserves the forced-low
+            // history, pulse and input modes consume it. CA2 needs a previous
+            // low and rising-edge input; CB2 needs an output low/high pair.
+            let history = &mut self.control_state.history[side.index()];
+            let mode = (value & 0x38) >> 3;
+            if mode < 4 {
+                if p.control & 0x20 != 0 {
+                    p.irq2 = match side {
+                        Side::A => !matches!(history, C2History::None) && mode & 2 != 0,
+                        Side::B => matches!(history, C2History::Risen),
+                    };
+                }
+                *history = C2History::None;
+            } else {
+                *history = match mode {
+                    5 => C2History::None,
+                    6 => C2History::Low,
+                    7 if !matches!(history, C2History::None) => C2History::Risen,
+                    _ => *history,
+                };
+            }
             p.control = value & 0x3f;
             p.pulse = false;
             if p.control & 0x20 != 0 {
@@ -224,13 +298,144 @@ impl Pia {
                 return Err("invalid MOS 6520 PIA state".to_string());
             }
         }
-        Ok(())
+        self.control_state.validate(self)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_output_to_input_transitions_latch_c2_status() {
+        // Altirra Hardware Reference 2.5, "Spurious interrupts"; Acid800 1.2
+        // pia_irq.s checks these histories without an external C2 pin edge.
+        let cases = [
+            (Side::A, [0x3c, 0x3c, 0x3c, 0x14], 0x14, false),
+            (Side::A, [0x3c, 0x3c, 0x34, 0x14], 0x54, false),
+            (Side::A, [0x3c, 0x34, 0x3c, 0x14], 0x54, false),
+            (Side::A, [0x3c, 0x34, 0x3c, 0x1c], 0x5c, true),
+            (Side::A, [0x34, 0x34, 0x34, 0x04], 0x04, false),
+            (Side::A, [0x34, 0x34, 0x2c, 0x14], 0x14, false),
+            (Side::A, [0x34, 0x34, 0x24, 0x14], 0x54, false),
+            (Side::A, [0x34, 0x34, 0x14, 0x34], 0x34, false),
+            (Side::B, [0x34, 0x3c, 0x3c, 0x04], 0x44, false),
+            (Side::B, [0x34, 0x3c, 0x3c, 0x0c], 0x4c, true),
+            (Side::B, [0x34, 0x3c, 0x04, 0x04], 0x44, false),
+            (Side::B, [0x34, 0x3c, 0x04, 0x24], 0x24, false),
+            (Side::B, [0x34, 0x24, 0x3c, 0x04], 0x44, false),
+            (Side::B, [0x34, 0x28, 0x3c, 0x04], 0x04, false),
+            (Side::B, [0x34, 0x04, 0x3c, 0x04], 0x04, false),
+            (Side::B, [0x34, 0x3c, 0x34, 0x04], 0x04, false),
+            (Side::B, [0x3c, 0x34, 0x3c, 0x04], 0x44, false),
+        ];
+        for (side, writes, expected, irq) in cases {
+            let mut p = Pia::new();
+            let control = side.index() as u8 * 2 + 1;
+            for value in writes {
+                p.write(control, value);
+                p.tick(8);
+                assert!(p.validate().is_ok());
+            }
+            assert_eq!(p.read(control), expected, "{side:?}: {writes:02x?}");
+            assert_eq!(p.irq(side), irq, "{side:?}: {writes:02x?}");
+        }
+    }
+
+    #[test]
+    fn control_generated_c2_status_obeys_acknowledgement_and_masks() {
+        for side in [Side::A, Side::B] {
+            let mut p = Pia::new();
+            let data = side.index() as u8 * 2;
+            let control = data + 1;
+            for value in [0x3c, 0xc0, 0xff] {
+                p.write(control, value);
+                assert_eq!(p.read(control), value & 0x3f);
+                assert!(!p.irq(side));
+            }
+            for value in [0x34, 0x3c, 0x14] {
+                p.write(control, value);
+            }
+            assert_eq!(p.read(control), 0x54);
+            assert!(!p.irq(side));
+            p.write(control, 0x00);
+            p.read(data);
+            assert_eq!(p.read(control), 0x40);
+            p.write(control, 0x18);
+            p.read(data);
+            assert_eq!(p.read(control), 0x58);
+            assert!(p.irq(side));
+            p.write(control, 0x1c);
+            p.peek(data);
+            p.write(data, 0xff);
+            assert_eq!(p.read(control), 0x5c);
+            p.read(data);
+            assert_eq!(p.read(control), 0x1c);
+            assert!(!p.irq(side));
+            p.write(control, 0x14);
+            assert_eq!(p.read(control), 0x14);
+        }
+    }
+
+    #[test]
+    fn c2_history_checkpoint_reset_and_invalid_restore() {
+        let mut p = Pia::new();
+        p.write(1, 0x34);
+        p.write(1, 0x24);
+        p.write(3, 0x34);
+        p.write(3, 0x3c);
+        let state = p.save_control();
+        let mut legacy = p.clone();
+        legacy.initialize_legacy_control();
+        assert_eq!(legacy.peek(1), 0x24);
+        assert_eq!(legacy.peek(3), 0x3c);
+        for control in [1, 3] {
+            legacy.write(control, 0x14);
+            assert_eq!(legacy.peek(control), 0x14);
+        }
+        let mut restored = p.clone();
+        restored.initialize_legacy_control();
+        restored.restore_control(&state).unwrap();
+        for (pia, expected) in [(&mut p, 0x54), (&mut restored, 0x54)] {
+            pia.write(1, 0x14);
+            pia.write(3, 0x14);
+            assert_eq!(pia.peek(1), expected);
+            assert_eq!(pia.peek(3), expected);
+        }
+        let previous = restored.save_control();
+        assert!(restored.restore_control(&state).is_err());
+        assert_eq!(restored.save_control(), previous);
+        restored.write(1, 0x34);
+        restored.write(3, 0x34);
+        restored.write(3, 0x3c);
+        restored.reset();
+        for control in [1, 3] {
+            restored.write(control, 0x14);
+            assert_eq!(restored.peek(control), 0x14);
+        }
+    }
+
+    #[test]
+    fn c2_history_does_not_replace_external_edges_or_affect_other_port() {
+        for side in [Side::A, Side::B] {
+            let mut p = Pia::new();
+            let control = side.index() as u8 * 2 + 1;
+            p.write(control, 0x34);
+            p.write(control, 0x3c);
+            p.set_c2(side, false);
+            p.write(control, 0x04);
+            assert_eq!(
+                p.peek(control) & 0x40,
+                if side.index() == 0 { 0 } else { 0x40 }
+            );
+            p.read(control - 1);
+            p.set_c2(side, true);
+            assert_eq!(p.peek(control), 0x04);
+            p.set_c2(side, false);
+            assert_eq!(p.peek(control), 0x44);
+            assert_eq!(p.peek(if control == 1 { 3 } else { 1 }), 0);
+        }
+    }
 
     #[test]
     fn direction_selection_and_asymmetric_pin_readback() {
