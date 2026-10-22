@@ -35,19 +35,20 @@ impl Cpu {
             3 => v | (1 << bit),
             _ => v,
         };
+        let mut extra = 0;
         if matches!(dst, Loc::Imm(_)) {
             // BTST Dn,#imm: SingleStepTests 10 clocks.
-            self.idle(2);
+            extra = 2;
         } else if matches!(dst, Loc::D(_)) {
             // UM Table 8-12: on a register the operation takes 2 more clocks for bits 16-31; BCLR 2 more again.
             let high = if bit >= 16 { 2 } else { 0 };
-            self.idle(match kind {
+            extra = match kind {
                 0 => 2,
                 2 => 4 + high,
                 _ => 2 + high,
-            });
+            };
         }
-        self.prefetch_next(bus)?;
+        self.prefetch_then_idle(bus, extra)?;
         if kind != 0 {
             self.write_loc(bus, dst, sz, new)?;
         }

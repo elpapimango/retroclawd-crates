@@ -112,12 +112,12 @@ impl Cpu {
         let (m, r) = src_field(op);
         let dst = self.ea(bus, m, r, Sz::B, false)?;
         let set = self.condition((op >> 8) & 0xF);
+        let mut extra = if set { 2 } else { 0 };
         if let Loc::Mem(_) = dst {
             self.read_loc(bus, dst, Sz::B)?;
-        } else if set {
-            self.idle(2);
+            extra = 0;
         }
-        self.prefetch_next(bus)?;
+        self.prefetch_then_idle(bus, extra)?;
         self.write_loc(bus, dst, Sz::B, if set { 0xFF } else { 0 })
     }
 
@@ -183,15 +183,13 @@ impl Cpu {
     pub(crate) fn op_jsr<B: M68kBus>(&mut self, bus: &mut B, op: u16) -> Result<(), Fault> {
         let (target, ret) = self.jump_target(bus, op)?;
         self.check_target(target)?;
+        // The first word of the target is fetched before the return address is stacked (SingleStepTests).
+        self.pc = target;
+        let fc = self.program_fc();
+        self.prefetch[0] = self.bus_read(bus, target, Size::Word, fc, true)? as u16;
         self.push_long(bus, ret)?;
-        self.jump_to(bus, target)
-    }
-
-    pub(crate) fn pop_word<B: M68kBus>(&mut self, bus: &mut B) -> Result<u32, Fault> {
-        let sp = self.a7();
-        let v = self.read_mem(bus, sp, Sz::W)?;
-        self.set_a7(sp.wrapping_add(2));
-        Ok(v)
+        self.prefetch[1] = self.bus_read(bus, target.wrapping_add(2), Size::Word, fc, true)? as u16;
+        Ok(())
     }
 
     pub(crate) fn pop_long<B: M68kBus>(&mut self, bus: &mut B) -> Result<u32, Fault> {
@@ -206,18 +204,27 @@ impl Cpu {
         self.jump_to(bus, target)
     }
 
+    /// The status word and the PC from the stack, in the order the chip reads them: the PC's high word, the status
+    /// word, the PC's low word (SingleStepTests).
+    fn pop_status_and_pc<B: M68kBus>(&mut self, bus: &mut B) -> Result<(u16, u32), Fault> {
+        let sp = self.a7();
+        let hi = self.read_mem(bus, sp.wrapping_add(2), Sz::W)?;
+        let status = self.read_mem(bus, sp, Sz::W)? as u16;
+        let lo = self.read_mem(bus, sp.wrapping_add(4), Sz::W)?;
+        self.set_a7(sp.wrapping_add(6));
+        Ok((status, hi << 16 | lo))
+    }
+
     /// RTR: the condition codes, then the PC, from the stack.
     pub(crate) fn op_rtr<B: M68kBus>(&mut self, bus: &mut B) -> Result<(), Fault> {
-        let ccr = self.pop_word(bus)? as u16;
-        let target = self.pop_long(bus)?;
+        let (ccr, target) = self.pop_status_and_pc(bus)?;
         self.set_sr((self.sr() & 0xFF00) | (ccr & 0x1F));
         self.jump_to(bus, target)
     }
 
     /// RTE: SR and PC from the supervisor stack, then SR takes effect (and may switch to the user stack).
     pub(crate) fn op_rte<B: M68kBus>(&mut self, bus: &mut B) -> Result<(), Fault> {
-        let sr = self.pop_word(bus)? as u16;
-        let target = self.pop_long(bus)?;
+        let (sr, target) = self.pop_status_and_pc(bus)?;
         self.set_sr(sr);
         self.jump_to(bus, target)
     }

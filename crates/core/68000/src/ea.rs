@@ -95,7 +95,8 @@ impl Cpu {
 
     /// `(d8,base,Xn)`: the brief extension word (PRM 2.2.7): D/A in bit 15, register in 14-12, W/L in 11, d8 in 7-0.
     fn indexed<B: M68kBus>(&mut self, bus: &mut B, base: u32) -> Result<u32, Fault> {
-        let ext = self.extension(bus)? as u32;
+        // The index is added while the queue refills (SingleStepTests): the 2 internal clocks come first.
+        let ext = self.extension_after(bus, 2)? as u32;
         let r = ((ext >> 12) & 7) as usize;
         let x = if ext & 0x8000 != 0 {
             self.an(r)
@@ -103,7 +104,6 @@ impl Cpu {
             self.d[r]
         };
         let x = if ext & 0x0800 != 0 { x } else { sext16(x) };
-        self.idle(2);
         Ok(base.wrapping_add(x).wrapping_add(sext8(ext)))
     }
 
@@ -119,6 +119,24 @@ impl Cpu {
             Loc::Imm(v) => v,
             Loc::Mem(a) => self.read_mem(bus, a, sz)?,
         })
+    }
+
+    /// Like `read_loc`, but a long in memory is read low word first (ADDX/SUBX on `-(An)`).
+    pub(crate) fn read_loc_low_first<B: M68kBus>(
+        &mut self,
+        bus: &mut B,
+        loc: Loc,
+        sz: Sz,
+    ) -> Result<u32, Fault> {
+        match (loc, sz) {
+            (Loc::Mem(a), Sz::L) => {
+                let fc = self.data_fc();
+                let lo = self.bus_read(bus, a.wrapping_add(2), Size::Word, fc, false)?;
+                let hi = self.bus_read(bus, a, Size::Word, fc, false)?;
+                Ok(hi << 16 | lo)
+            }
+            _ => self.read_loc(bus, loc, sz),
+        }
     }
 
     /// Writes `v` (its low `sz` bits); a data register keeps its other bits, an address register takes all 32.
@@ -173,6 +191,24 @@ impl Cpu {
                 self.bus_write(bus, addr, Size::Word, v >> 16, fc)?;
                 self.bus_write(bus, addr.wrapping_add(2), Size::Word, v & 0xFFFF, fc)
             }
+        }
+    }
+
+    /// The write that ends a read-modify-write instruction: a long goes out low word first (SingleStepTests).
+    pub(crate) fn write_loc_rmw<B: M68kBus>(
+        &mut self,
+        bus: &mut B,
+        loc: Loc,
+        sz: Sz,
+        v: u32,
+    ) -> Result<(), Fault> {
+        match (loc, sz) {
+            (Loc::Mem(a), Sz::L) => {
+                let fc = self.data_fc();
+                self.bus_write(bus, a.wrapping_add(2), Size::Word, v & 0xFFFF, fc)?;
+                self.bus_write(bus, a, Size::Word, v >> 16, fc)
+            }
+            _ => self.write_loc(bus, loc, sz, v),
         }
     }
 

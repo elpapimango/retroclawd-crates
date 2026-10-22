@@ -84,8 +84,7 @@ impl Cpu {
         };
         self.d[dn] = v;
         self.set_logic_flags(v, Sz::L);
-        self.idle(34 + 2 * n);
-        self.prefetch_next(bus)
+        self.prefetch_then_idle(bus, 34 + 2 * n)
     }
 
     /// DIVU/DIVS: on overflow V is set and Dn is unchanged; a zero divisor raises vector 5.

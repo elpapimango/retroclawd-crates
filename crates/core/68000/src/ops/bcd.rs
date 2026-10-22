@@ -77,8 +77,7 @@ impl Cpu {
                 self.bcd_sub(d, s)
             };
             self.d[rx] = (self.d[rx] & !0xFF) | v;
-            self.idle(2);
-            self.prefetch_next(bus)
+            self.prefetch_then_idle(bus, 2)
         } else {
             self.idle(2);
             let src = self.ea(bus, 4, ry as u16, Sz::B, true)?;
@@ -100,10 +99,7 @@ impl Cpu {
         let dst = self.ea(bus, m, r, Sz::B, false)?;
         let d = self.read_loc(bus, dst, Sz::B)?;
         let v = self.bcd_sub(0, d);
-        if m == 0 {
-            self.idle(2);
-        }
-        self.prefetch_next(bus)?;
+        self.prefetch_then_idle(bus, if m == 0 { 2 } else { 0 })?;
         self.write_loc(bus, dst, Sz::B, v)
     }
 
@@ -125,8 +121,7 @@ impl Cpu {
         // No trap: Z from Dn.W, V and C cleared, N kept (SingleStepTests; PRM leaves Z, V, C undefined).
         let z = if v == 0 { 0x04 } else { 0 };
         self.set_sr((self.sr() & 0xFFF8 & !0x04) | z);
-        self.idle(6);
-        self.prefetch_next(bus)
+        self.prefetch_then_idle(bus, 6)
     }
 
     pub(crate) fn op_trap(&mut self, op: u16) -> Result<(), Fault> {

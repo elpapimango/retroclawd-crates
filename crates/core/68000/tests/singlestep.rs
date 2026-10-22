@@ -4,7 +4,8 @@
 //!
 //! The files are not committed (the repository states no licence): `scripts/fetch_singlesteptests.sh` downloads them
 //! into `tests/sst/`; without them every test here prints a note and passes. `RC_SST_DIR` points elsewhere,
-//! `RC_SST_BUS=1` also compares the bus transactions, `RC_SST_PRINT=1` prints every failure.
+//! the bus transactions are compared too (accesses, their order and the internal clocks between them; `RC_SST_BUS=0`
+//! turns that off), `RC_SST_PRINT=<n>` prints the first n failures of each file (non-numeric: all).
 //! The failures are an explicit list, `EXPECTED` (file, reason, count; the reasons and their sources are in
 //! `singlestep-expected.md`): a file fails if any other case fails, or if a listed count changes, so a listed case
 //! that starts passing fails it too.
@@ -179,6 +180,11 @@ fn expected_events(case: &Case) -> Vec<Event> {
                 word: false,
                 value: before,
             });
+            // The test data's TAS transaction is one 10-clock cycle: the read, 2 internal clocks, the write.
+            let length = t[1].as_u64().unwrap_or(8) as u32;
+            if length > 8 {
+                out.push(Event::Idle(length - 8));
+            }
             out.push(Event::Access {
                 write: true,
                 fc,
@@ -331,8 +337,12 @@ fn run_file(file: &str) {
         return;
     };
     let cases: Vec<Case> = serde_json::from_reader(GzDecoder::new(f)).expect("parse test file");
-    let compare_bus = std::env::var_os("RC_SST_BUS").is_some();
-    let print = std::env::var_os("RC_SST_PRINT").is_some();
+    let compare_bus = std::env::var("RC_SST_BUS").map_or(true, |v| v != "0");
+    // RC_SST_PRINT=<n> prints the first n failures of each file (any other value: all of them).
+    let print_max = std::env::var("RC_SST_PRINT")
+        .ok()
+        .map(|v| v.parse::<usize>().unwrap_or(usize::MAX));
+    let mut printed = 0usize;
     let started = std::time::Instant::now();
     let mut unexpected = Vec::new();
     let mut failed = 0;
@@ -340,7 +350,8 @@ fn run_file(file: &str) {
     for case in &cases {
         if let Err(diff) = run(case, compare_bus) {
             failed += 1;
-            if print {
+            if print_max.is_some_and(|n| printed < n) {
+                printed += 1;
                 println!("{}\t{}", case.name, diff);
             }
             match classify(case, &diff) {

@@ -78,13 +78,13 @@ impl Cpu {
     ) -> Result<(), Fault> {
         let (m, r) = src_field(op);
         let dst = self.ea(bus, m, r, Sz::W, false)?;
+        let mut extra = 2;
         if let Loc::Mem(_) = dst {
             self.read_loc(bus, dst, Sz::W)?;
-        } else {
-            self.idle(2);
+            extra = 0;
         }
         let sr = self.sr() as u32;
-        self.prefetch_next(bus)?;
+        self.prefetch_then_idle(bus, extra)?;
         self.write_loc(bus, dst, Sz::W, sr)
     }
 

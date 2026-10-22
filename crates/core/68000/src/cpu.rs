@@ -418,6 +418,33 @@ impl Cpu {
         Ok(word)
     }
 
+    /// The fetch that ends an instruction, then `n` internal clocks: an operation on registers reads the next word
+    /// first and finishes its arithmetic after it (SingleStepTests).
+    pub(crate) fn prefetch_then_idle<B: M68kBus>(
+        &mut self,
+        bus: &mut B,
+        n: u32,
+    ) -> Result<(), Fault> {
+        self.prefetch_next(bus)?;
+        self.idle(n);
+        Ok(())
+    }
+
+    /// Like `extension`, with `internal` clocks between taking the word and reading the next one.
+    pub(crate) fn extension_after<B: M68kBus>(
+        &mut self,
+        bus: &mut B,
+        internal: u32,
+    ) -> Result<u16, Fault> {
+        let word = self.prefetch[1];
+        self.pc = self.pc.wrapping_add(2);
+        self.idle(internal);
+        let fc = self.program_fc();
+        self.prefetch[1] =
+            self.bus_read(bus, self.pc.wrapping_add(2), Size::Word, fc, true)? as u16;
+        Ok(word)
+    }
+
     /// Reloads both prefetch words from `pc` (after a jump or an exception).
     pub(crate) fn fill_prefetch<B: M68kBus>(&mut self, bus: &mut B) -> Result<(), Fault> {
         let fc = self.program_fc();

@@ -29,3 +29,21 @@ here to settle it.
 `e502 [ASL.b Q, D2] 1583` and `e502 [ASL.b Q, D2] 1761`: a byte-sized shift whose expected D2 has changed upper
 bytes, which a byte-sized shift does not touch (the issue below shows the data). Upstream issue: <https://github.com/SingleStepTests/680x0/issues/4>. Listed by name in
 `BAD_UPSTREAM`.
+
+## Bus transactions (Phase 3, 2026-10-22)
+
+The suite compares the bus transactions too: the accesses with their function codes, sizes and order, and the internal
+clocks between them (`Idle`). Before Phase 3 that comparison passed 557 843 of 983 930 cases (`RC_SST_BUS=1`); now it
+passes every case the functional comparison does, so the list above is also the list of bus disagreements, and the three
+instruction groups below were the ones the data taught:
+
+- **Register operations read the next word before their internal clocks** (shifts and rotates, `EXG`, `MULU/MULS`, long
+  `ADD/SUB/AND/OR/CMP`, `ADDA/SUBA/CMPA`, `ABCD/SBCD/NBCD`, `Scc`, `BTST` and friends, `CHK` without a trap, `MOVE SR`):
+  the fetch, then the idle clocks. `DIVU/DIVS` keep their clocks before it.
+- **The indexed modes add the index while the queue refills:** their 2 internal clocks come before the refill read.
+- **Long read-modify-write results go out low word first** (`ADD.L Dn,<ea>`, `NEG.L`, `CLR.L`, ...), after the fetch of the
+  next word; `ADDX/SUBX.L` on `-(An)` read both operands low word first and refill the queue between the two writes;
+  `RTE/RTR` read the PC's high word, then the status word, then the low word; `JSR` fetches the first target word before
+  it stacks the return address; `PEA` stacks before the final fetch for the two absolute modes and after it for the others.
+- **TAS** is one 10-clock cycle in the data (read, 2 internal clocks, write); the harness expands it to the read, an
+  `Idle(2)` and the write.
