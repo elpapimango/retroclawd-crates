@@ -252,6 +252,11 @@ impl<F: Floppy> Wd1770<F> {
 
     fn start_command(&mut self, value: u8) {
         self.st.cmd = value;
+        // WD177X data sheet, INTRQ: "reset by either reading the status register or by loading the command register
+        // with a new command". A Force Interrupt decides for itself (its immediate-interrupt condition).
+        if value & 0xF0 != 0xD0 {
+            self.st.irq = false;
+        }
         let (command, ty) = Command::decode(value);
         self.st.command = command;
         self.st.ty = ty;
