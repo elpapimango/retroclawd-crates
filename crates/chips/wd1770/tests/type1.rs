@@ -150,3 +150,67 @@ fn a_size_code_beyond_the_table_uses_its_low_two_bits() {
     }
     assert_eq!(bytes, 1024, "size code $FF read as 3 (1024 bytes)");
 }
+
+/// A command is pending from the write that gives it until it finishes, including the 24 microseconds before Busy is set.
+#[test]
+fn a_command_is_pending_from_its_write_until_it_finishes() {
+    let mut fdc = Wd1770::new(Empty, 8, true);
+    assert!(!fdc.command_pending());
+    fdc.write(0, 0x0B); // restore, h = 1
+    assert!(fdc.command_pending(), "pending at once");
+    assert_eq!(fdc.peek(0) & 1, 0, "Busy is not set yet");
+    fdc.tick(100_000);
+    assert!(fdc.intrq());
+    assert!(!fdc.command_pending(), "finished");
+}
+
+/// A drive that names its revolution makes the spin-up last six whole revolutions, whatever the phase of the index hole.
+struct Turning {
+    pos: u64,
+}
+
+impl Floppy for Turning {
+    fn index(&self) -> bool {
+        self.pos < 100
+    }
+    fn index_count(&self) -> u32 {
+        0
+    }
+    fn index_count_reset(&mut self) {}
+    fn rotate(&mut self, bytes: u64) {
+        self.pos = (self.pos + bytes) % 6267;
+    }
+    fn revolution_bytes(&self) -> u64 {
+        6267
+    }
+    fn track0(&self) -> bool {
+        true
+    }
+    fn write_protect(&self) -> bool {
+        true
+    }
+    fn seek_pulse(&mut self, _: bool) {}
+    fn read(&mut self) -> u16 {
+        0
+    }
+    fn write(&mut self, _: u16) {}
+}
+
+#[test]
+fn spin_up_lasts_six_whole_revolutions_when_the_drive_names_its_revolution() {
+    let revolution = 6267 * 256;
+    for phase in [0u64, 1000, 4000] {
+        let mut fdc = Wd1770::new(Turning { pos: phase }, 8, true);
+        fdc.write(0, 0x00); // restore at 6 ms steps, h = 0: the motor must spin up first
+        let mut cycles = 0u64;
+        while !fdc.intrq() && cycles < 20 * revolution {
+            fdc.tick(256);
+            cycles += 256;
+        }
+        assert!(fdc.intrq());
+        assert!(
+            (6 * revolution..6 * revolution + 4000).contains(&cycles),
+            "phase {phase}: done after {cycles} cycles"
+        );
+    }
+}

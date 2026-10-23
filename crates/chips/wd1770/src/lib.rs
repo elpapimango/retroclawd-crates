@@ -32,6 +32,11 @@ pub trait Floppy {
     fn index_count_reset(&mut self);
     /// The disk turns by `bytes` byte times.
     fn rotate(&mut self, bytes: u64);
+    /// Byte times in one revolution, when the drive wants the spin-up to last exactly six of them; 0 (the default) makes the
+    /// spin-up end at the sixth index pulse, as the data sheet has it.
+    fn revolution_bytes(&self) -> u64 {
+        0
+    }
     fn track0(&self) -> bool;
     fn write_protect(&self) -> bool;
     /// One step pulse: `inward` moves the head toward higher tracks.
@@ -199,6 +204,12 @@ impl<F: Floppy> Wd1770<F> {
     /// The interrupt request line.
     pub fn intrq(&self) -> bool {
         self.st.irq
+    }
+
+    /// A command has been written and has not finished: true from the write, before the controller has set Busy (it does that
+    /// 24 microseconds later), so a host that ticks the controller only while it is busy still ticks it for a new command.
+    pub fn command_pending(&self) -> bool {
+        self.st.ty >= 1
     }
 
     /// The data request line (status bit 1 while a transfer is running).
@@ -388,13 +399,24 @@ impl<F: Floppy> Wd1770<F> {
             }
             self.st.status |= MO;
             self.floppy.index_count_reset();
+            // The start of the spin-up, for a drive that wants whole revolutions (`tmp` is idle in a type I-III command).
+            self.st.tmp = self.st.now as u32;
             self.st.step = 2;
         }
-        // step 2: six index pulses of spin-up.
+        // step 2: six index pulses of spin-up, or six whole revolutions when the drive says how long one is.
         if self.st.step == 2 {
             self.catch_up_rotation();
-            if self.floppy.index_count() < 6 {
-                return false;
+            let revolution = self.floppy.revolution_bytes();
+            if revolution == 0 {
+                if self.floppy.index_count() < 6 {
+                    return false;
+                }
+            } else {
+                let spin_up = 6 * revolution * self.byte_time();
+                let elapsed = u64::from((self.st.now as u32).wrapping_sub(self.st.tmp));
+                if elapsed < spin_up {
+                    return false;
+                }
             }
             self.st.step = 3;
         }
