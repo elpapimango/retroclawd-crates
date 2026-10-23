@@ -38,6 +38,12 @@ attributed to one specific source the way the file-format work above is,
 since this is closer to "how the chip works" than "one project's specific
 choice."
 
+The YM2149 variant (`Variant::Ym2149`, 2026-10-21) follows Yamaha's YM2149 catalog, September 1992
+(https://bitsavers.org/components/yamaha/YM2149_199209.pdf, SHA-256
+`a4b946bf525fc1a7c6dec9e7662ce2342d3a3c627f980c7c3b1a396df7e91d20`): the envelope shapes of Table 4, 32 envelope
+steps per period (`fE = fMaster / 256 EP`), and the D/A converter levels of Fig. 1 (each step 2^(-1/4) below the
+next, fixed level L at envelope step 2L + 1).
+
 ## ZX Spectrum tape formats (`crates/zx-tape`)
 
 Standard ROM tape-loading pulse timings (pilot pulse 2168 T-states, 8063
@@ -239,3 +245,19 @@ Written from the manuals; no code, table or comment of another core is copied.
   overflow) or give no bus order around a fault, the core follows this data.
 - `m68k` 0.14.6 (https://github.com/benletchford/m68k-rs, MIT): a dev-dependency of `tests/differential.rs` only,
   an independent oracle for random instructions. It is never linked into the core or a machine.
+
+## MC6850 ACIA (`crates/chips/mc6850`, 2026-10-21)
+
+From Motorola's MC6850 data sheet (DS9493R, 1985; copy at
+https://docs.ampnuts.ru/eevblog.docs/Tektronix/TLA_Ensoniq/Datasheets/MC6850.pdf, SHA-256
+`294a8b9f557d03a2a7f4d736d060244f39216dad2d5479d2e47954feb4f34655`): control register, status register, master
+reset, transmit/receive sequences, CTS/DCD behaviour.
+
+## WD1770/WD1772 floppy controller (`crates/chips/wd1770`, moved from retroclawd-commodore 2026-10-21)
+
+Moved unchanged from retroclawd-commodore `crates/chips/wd1770` (commit 77bef16), where it was written for the
+1581 drive: behaviour read from VICE (GPL, reference only, VICE-Team svn mirror) `drive/iec/wd1770.c` (command state
+machine, status bits, timing constants) and the WD1770 datasheet (command set). Its behaviour tests are the 1581
+tests in retroclawd-commodore. The Atari ST uses it as a WD1772, checked against Western Digital's WD177X-00 data
+sheet (*1986 Storage Management Products Handbook*, https://bitsavers.org/components/westernDigital/_dataBooks/,
+SHA-256 `72382885abfde5cdee875384aed7ca97c17112db047d7792d3a4b4d3ed0c895f`).

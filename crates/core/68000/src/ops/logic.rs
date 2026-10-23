@@ -30,10 +30,12 @@ impl Cpu {
         let v = apply(logic, self.d[dn], s) & sz.mask();
         self.d[dn] = (self.d[dn] & !sz.mask()) | v;
         self.set_logic_flags(v, sz);
-        if sz == Sz::L {
-            self.idle(if m == 0 || (m == 7 && r == 4) { 4 } else { 2 });
-        }
-        self.prefetch_next(bus)
+        let extra = match sz {
+            Sz::L if m == 0 || (m == 7 && r == 4) => 4,
+            Sz::L => 2,
+            _ => 0,
+        };
+        self.prefetch_then_idle(bus, extra)
     }
 
     /// AND/OR/EOR `Dn,<ea>`; EOR's destination may be a data register.
@@ -49,11 +51,8 @@ impl Cpu {
         let d = self.read_loc(bus, dst, sz)?;
         let v = apply(logic, d, self.d[((op >> 9) & 7) as usize]) & sz.mask();
         self.set_logic_flags(v, sz);
-        if m == 0 && sz == Sz::L {
-            self.idle(4);
-        }
-        self.prefetch_next(bus)?;
-        self.write_loc(bus, dst, sz, v)
+        self.prefetch_then_idle(bus, if m == 0 && sz == Sz::L { 4 } else { 0 })?;
+        self.write_loc_rmw(bus, dst, sz, v)
     }
 
     /// ANDI/ORI/EORI `#imm,<ea>`.
@@ -70,11 +69,15 @@ impl Cpu {
         let d = self.read_loc(bus, dst, sz)?;
         let v = apply(logic, d, s) & sz.mask();
         self.set_logic_flags(v, sz);
-        if matches!(dst, Loc::D(_)) && sz == Sz::L {
-            self.idle(4);
-        }
-        self.prefetch_next(bus)?;
-        self.write_loc(bus, dst, sz, v)
+        self.prefetch_then_idle(
+            bus,
+            if matches!(dst, Loc::D(_)) && sz == Sz::L {
+                4
+            } else {
+                0
+            },
+        )?;
+        self.write_loc_rmw(bus, dst, sz, v)
     }
 
     pub(crate) fn op_not<B: M68kBus>(&mut self, bus: &mut B, op: u16, sz: Sz) -> Result<(), Fault> {
@@ -82,10 +85,7 @@ impl Cpu {
         let dst = self.ea(bus, m, r, sz, false)?;
         let v = !self.read_loc(bus, dst, sz)? & sz.mask();
         self.set_logic_flags(v, sz);
-        if m == 0 && sz == Sz::L {
-            self.idle(2);
-        }
-        self.prefetch_next(bus)?;
-        self.write_loc(bus, dst, sz, v)
+        self.prefetch_then_idle(bus, if m == 0 && sz == Sz::L { 2 } else { 0 })?;
+        self.write_loc_rmw(bus, dst, sz, v)
     }
 }

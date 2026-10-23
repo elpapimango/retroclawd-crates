@@ -39,6 +39,33 @@ const VOLUME_TABLE: [f32; 16] = [
 /// (tone) or `/16` (noise) -- the AY's own internal prescalers, per its
 /// documented architecture.
 const TONE_PRESCALE: u32 = 8;
+
+/// YM2149 D/A converter output for the 5-bit level 0-31: Yamaha's YM2149 catalog (1992), Fig. 1 "Output level of D/A
+/// convertor". Step 31 is full scale and the axis reads 1.0, .841, .707, .596, .5, .42, .354, .297, .25, .21, .177,
+/// .149, .125 down the steps, i.e. each step is 2^(-1/4) (1.5 dB) below the next; the curve keeps that ratio to
+/// step 1, and step 0 is the zero line.
+const YM_LEVEL_TABLE: [f32; 32] = {
+    let mut t = [0.0f32; 32];
+    // 2^(-1/4), to f32 precision.
+    const STEP: f32 = 0.840_896_4;
+    let mut level = 31;
+    let mut v = 1.0f32;
+    while level > 0 {
+        t[level] = v;
+        v *= STEP;
+        level -= 1;
+    }
+    t
+};
+
+/// Which chip: the General Instrument AY-3-8910 or the Yamaha YM2149 (the same registers; the YM has a 32-step
+/// envelope and a 5-bit D/A converter, per its catalog).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Variant {
+    #[default]
+    Ay38910,
+    Ym2149,
+}
 const NOISE_PRESCALE: u32 = 16;
 const ENVELOPE_PRESCALE: u32 = 8;
 
@@ -164,7 +191,7 @@ impl Envelope {
         self.prescale_counter = 0;
     }
 
-    fn tick(&mut self, cycles: u32) {
+    fn tick(&mut self, cycles: u32, ym: bool) {
         if self.holding {
             return;
         }
@@ -174,7 +201,11 @@ impl Envelope {
             self.counter += 1;
             if self.counter >= self.effective_period() {
                 self.counter = 0;
-                self.advance();
+                if ym {
+                    self.advance_ym();
+                } else {
+                    self.advance();
+                }
                 if self.holding {
                     break;
                 }
@@ -203,6 +234,41 @@ impl Envelope {
             self.position = 0;
         } else {
             self.position = 0;
+        }
+    }
+
+    /// The YM2149's end of a ramp, per Table 4 of its catalog: without CONT the level drops to 0 and stays; with
+    /// HOLD it stays at the ramp's last value, or the opposite end with ALT; with ALT alone the direction reverses;
+    /// otherwise the ramp starts again. A held level is stored as an attacking position.
+    fn advance_ym(&mut self) {
+        let s = EnvelopeShape::from(self.shape);
+        if self.position < 31 {
+            self.position += 1;
+            return;
+        }
+        let last = if self.attacking { 31 } else { 0 };
+        if !s.continue_ {
+            self.attacking = true;
+            self.position = 0;
+            self.holding = true;
+        } else if s.hold {
+            self.attacking = true;
+            self.position = if s.alternate { 31 - last } else { last };
+            self.holding = true;
+        } else {
+            if s.alternate {
+                self.attacking = !self.attacking;
+            }
+            self.position = 0;
+        }
+    }
+
+    /// The full 5-bit level (0-31): the YM2149's envelope output E4-E0.
+    fn level5(&self) -> u8 {
+        if self.attacking {
+            self.position
+        } else {
+            31 - self.position
         }
     }
 
@@ -238,6 +304,11 @@ pub struct Ay3_8910 {
     /// per host machine, most of which don't wire anything meaningful to
     /// them at all).
     io_ports: [u8; 2],
+    /// AY-3-8910 or YM2149: configuration, not state. Never serialized, so the save states machines write with
+    /// non-self-describing formats (bincode) keep their layout; a loaded chip is an AY until its owner calls
+    /// `set_variant`.
+    #[serde(skip)]
+    variant: Variant,
 }
 
 fn register_valid_default() -> bool {
@@ -263,6 +334,32 @@ impl Ay3_8910 {
             }, // non-zero seed: an all-zero LFSR never produces output
             envelope: Envelope::default(),
             io_ports: [0; 2],
+            variant: Variant::Ay38910,
+        }
+    }
+
+    /// A chip of the given variant, in the same power-on state as `new`.
+    pub fn with_variant(variant: Variant) -> Self {
+        Self {
+            variant,
+            ..Self::new()
+        }
+    }
+
+    pub fn variant(&self) -> Variant {
+        self.variant
+    }
+
+    /// Re-applies the chip's variant, e.g. after loading a saved state (which does not carry it).
+    pub fn set_variant(&mut self, variant: Variant) {
+        self.variant = variant;
+    }
+
+    /// The envelope generator's current level: 0-31 on the YM2149 (E4-E0), 0-15 on the AY-3-8910.
+    pub fn envelope_level(&self) -> u8 {
+        match self.variant {
+            Variant::Ym2149 => self.envelope.level5(),
+            Variant::Ay38910 => self.envelope.level(),
         }
     }
 
@@ -416,7 +513,7 @@ impl Ay3_8910 {
             ch.tick(cycles);
         }
         self.noise.tick(cycles);
-        self.envelope.tick(cycles);
+        self.envelope.tick(cycles, self.variant == Variant::Ym2149);
     }
 
     /// Current mixed output, normalized to `0.0..=1.0` (silence to loudest
@@ -424,7 +521,8 @@ impl Ay3_8910 {
     /// outputs; this sums them and leaves final loudness/normalization to
     /// the caller's own audio pipeline.
     pub fn output(&self) -> f32 {
-        let envelope_level = self.envelope.level();
+        let ym = self.variant == Variant::Ym2149;
+        let envelope_level = self.envelope_level();
         let mut total = 0.0;
         for ch in &self.channels {
             // Real AY mixer logic: a channel's gate is
@@ -434,12 +532,14 @@ impl Ay3_8910 {
             let tone_gate = !ch.tone_enabled || ch.output;
             let noise_gate = !ch.noise_enabled || self.noise.output;
             if tone_gate && noise_gate {
-                let level = if ch.use_envelope {
-                    envelope_level
-                } else {
-                    ch.volume
+                total += match (ym, ch.use_envelope) {
+                    (false, true) => VOLUME_TABLE[envelope_level as usize],
+                    (false, false) => VOLUME_TABLE[ch.volume as usize],
+                    (true, true) => YM_LEVEL_TABLE[envelope_level as usize],
+                    // Fig. 1: fixed level L sits at envelope step 2L + 1 (15 at 31, 14 at 29); L = 0 is the zero line.
+                    (true, false) if ch.volume == 0 => 0.0,
+                    (true, false) => YM_LEVEL_TABLE[ch.volume as usize * 2 + 1],
                 };
-                total += VOLUME_TABLE[level as usize];
             }
         }
         (total / 3.0).min(1.0)
@@ -569,7 +669,7 @@ mod tests {
 
         envelope.retrigger(0b1100); // continue + attack: ramps up from 0
         assert_eq!(envelope.level(), 0);
-        envelope.tick(ENVELOPE_PRESCALE * 2); // advance position by 2 (1 full period each)
+        envelope.tick(ENVELOPE_PRESCALE * 2, false); // advance position by 2 (1 full period each)
         assert_eq!(envelope.level(), 1);
     }
 
@@ -581,7 +681,7 @@ mod tests {
         };
         envelope.retrigger(0b0100); // attack only, no continue: one ramp then silence
         for _ in 0..40 {
-            envelope.tick(ENVELOPE_PRESCALE);
+            envelope.tick(ENVELOPE_PRESCALE, false);
         }
         assert!(envelope.holding);
         assert_eq!(envelope.level(), 15); // holding at position 0, decaying-style read (attacking=false once held)

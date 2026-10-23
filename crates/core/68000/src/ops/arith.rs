@@ -4,7 +4,7 @@
 //! Timing: the bus cycles fall out of the operand accesses; the internal clocks added here are the differences UM
 //! Tables 8-4 to 8-7 give for long operations on registers and for address-register destinations.
 
-use crate::bus::M68kBus;
+use crate::bus::{M68kBus, Size};
 use crate::cpu::{Cpu, Fault};
 use crate::ea::{Loc, sext16};
 use crate::opcodes::{Alu, Sz};
@@ -106,10 +106,12 @@ impl Cpu {
         let dn = ((op >> 9) & 7) as usize;
         let v = self.alu(alu, self.d[dn], s, sz);
         self.d[dn] = (self.d[dn] & !sz.mask()) | v;
-        if sz == Sz::L {
-            self.idle(if reg_or_imm(m, r) { 4 } else { 2 });
-        }
-        self.prefetch_next(bus)
+        let extra = match sz {
+            Sz::L if reg_or_imm(m, r) => 4,
+            Sz::L => 2,
+            _ => 0,
+        };
+        self.prefetch_then_idle(bus, extra)
     }
 
     /// ADD/SUB `Dn,<ea>` (memory destination).
@@ -126,7 +128,7 @@ impl Cpu {
         let s = self.d[((op >> 9) & 7) as usize];
         let v = self.alu(alu, d, s, sz);
         self.prefetch_next(bus)?;
-        self.write_loc(bus, dst, sz, v)
+        self.write_loc_rmw(bus, dst, sz, v)
     }
 
     /// ADDA/SUBA: the source (a word sign-extended) on all 32 bits of An; no flags.
@@ -147,12 +149,12 @@ impl Cpu {
             Alu::Sub => self.an(an).wrapping_sub(s),
         };
         self.set_an(an, v);
-        self.idle(if sz == Sz::W || reg_or_imm(m, r) {
+        let extra = if sz == Sz::W || reg_or_imm(m, r) {
             4
         } else {
             2
-        });
-        self.prefetch_next(bus)
+        };
+        self.prefetch_then_idle(bus, extra)
     }
 
     /// ADDX/SUBX `Dy,Dx` or `-(Ay),-(Ax)`.
@@ -173,23 +175,27 @@ impl Cpu {
                 Alu::Sub => self.alu_sub(d, s, x, sz, true, true),
             };
             self.d[rx] = (self.d[rx] & !sz.mask()) | v;
-            if sz == Sz::L {
-                self.idle(4);
-            }
-            self.prefetch_next(bus)
+            self.prefetch_then_idle(bus, if sz == Sz::L { 4 } else { 0 })
         } else {
             // UM Table 8-11: 18 (byte, word) / 30 (long) clocks; the two predecrements share 2 internal clocks.
             self.idle(2);
             self.check_predec_long(ry, sz)?;
             let src = self.ea(bus, 4, ry as u16, sz, true)?;
-            let s = self.read_loc(bus, src, sz)?;
+            let s = self.read_loc_low_first(bus, src, sz)?;
             self.check_predec_long(rx, sz)?;
             let dst = self.ea(bus, 4, rx as u16, sz, true)?;
-            let d = self.read_loc(bus, dst, sz)?;
+            let d = self.read_loc_low_first(bus, dst, sz)?;
             let v = match alu {
                 Alu::Add => self.alu_add(d, s, x, sz, true),
                 Alu::Sub => self.alu_sub(d, s, x, sz, true, true),
             };
+            if let (Loc::Mem(a), Sz::L) = (dst, sz) {
+                // A long goes out low word first, and the queue is refilled between the two writes.
+                let fc = self.data_fc();
+                self.bus_write(bus, a.wrapping_add(2), Size::Word, v & 0xFFFF, fc)?;
+                self.prefetch_next(bus)?;
+                return self.bus_write(bus, a, Size::Word, v >> 16, fc);
+            }
             self.prefetch_next(bus)?;
             self.write_loc(bus, dst, sz, v)
         }
@@ -238,10 +244,12 @@ impl Cpu {
         let d = self.read_loc(bus, dst, sz)?;
         let v = self.alu(alu, d, s, sz);
         if matches!(dst, Loc::D(_)) && sz == Sz::L {
-            self.idle(4);
+            return self
+                .prefetch_then_idle(bus, 4)
+                .and_then(|_| self.write_loc_rmw(bus, dst, sz, v));
         }
         self.prefetch_next(bus)?;
-        self.write_loc(bus, dst, sz, v)
+        self.write_loc_rmw(bus, dst, sz, v)
     }
 
     /// ADDQ/SUBQ `#1-8,<ea>`; on an address register the whole 32 bits, without flags.
@@ -265,17 +273,18 @@ impl Cpu {
             };
             self.set_an(r as usize, v);
             // SingleStepTests: 8 clocks for .W, 6 for .L (UM Table 8-4 gives 8 for both; the test data wins).
-            self.idle(if sz == Sz::L { 2 } else { 4 });
-            return self.prefetch_next(bus);
+            return self.prefetch_then_idle(bus, if sz == Sz::L { 2 } else { 4 });
         }
         let dst = self.ea(bus, m, r, sz, false)?;
         let d = self.read_loc(bus, dst, sz)?;
         let v = self.alu(alu, d, q, sz);
         if m == 0 && sz == Sz::L {
-            self.idle(4);
+            return self
+                .prefetch_then_idle(bus, 4)
+                .and_then(|_| self.write_loc_rmw(bus, dst, sz, v));
         }
         self.prefetch_next(bus)?;
-        self.write_loc(bus, dst, sz, v)
+        self.write_loc_rmw(bus, dst, sz, v)
     }
 
     /// CMP `<ea>,Dn`.
@@ -284,10 +293,7 @@ impl Cpu {
         let src = self.ea(bus, m, r, sz, false)?;
         let s = self.read_loc(bus, src, sz)?;
         self.alu_sub(self.d[((op >> 9) & 7) as usize], s, 0, sz, false, false);
-        if sz == Sz::L {
-            self.idle(2);
-        }
-        self.prefetch_next(bus)
+        self.prefetch_then_idle(bus, if sz == Sz::L { 2 } else { 0 })
     }
 
     /// CMPA: a word source is sign-extended and compared on 32 bits.
@@ -302,8 +308,7 @@ impl Cpu {
         let s = self.read_loc(bus, src, sz)?;
         let s = if sz == Sz::W { sext16(s) } else { s };
         self.alu_sub(self.an(((op >> 9) & 7) as usize), s, 0, Sz::L, false, false);
-        self.idle(2);
-        self.prefetch_next(bus)
+        self.prefetch_then_idle(bus, 2)
     }
 
     /// CMPM `(Ay)+,(Ax)+`.
@@ -333,10 +338,7 @@ impl Cpu {
         let dst = self.ea(bus, m, r, sz, false)?;
         let d = self.read_loc(bus, dst, sz)?;
         self.alu_sub(d, s, 0, sz, false, false);
-        if m == 0 && sz == Sz::L {
-            self.idle(2);
-        }
-        self.prefetch_next(bus)
+        self.prefetch_then_idle(bus, if m == 0 && sz == Sz::L { 2 } else { 0 })
     }
 
     /// NEG (`0 - d`) and NEGX (`0 - d - X`).
@@ -353,9 +355,11 @@ impl Cpu {
         let x = if extend { self.x_flag() } else { 0 };
         let v = self.alu_sub(0, d, x, sz, extend, true);
         if m == 0 && sz == Sz::L {
-            self.idle(2);
+            return self
+                .prefetch_then_idle(bus, 2)
+                .and_then(|_| self.write_loc_rmw(bus, dst, sz, v));
         }
         self.prefetch_next(bus)?;
-        self.write_loc(bus, dst, sz, v)
+        self.write_loc_rmw(bus, dst, sz, v)
     }
 }

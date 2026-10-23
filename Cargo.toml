@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/machine", "crates/plugin-api", "crates/core/z80", "crates/core/6502", "crates/core/68000", "crates/chips/ay-3-8910", "crates/chips/nec765", "crates/chips/pia-6520", "crates/formats/dsk", "crates/formats/zx-tape", "crates/build-info"]
+members = ["crates/machine", "crates/plugin-api", "crates/core/z80", "crates/core/6502", "crates/core/68000", "crates/chips/ay-3-8910", "crates/chips/mc6850", "crates/chips/nec765", "crates/chips/pia-6520", "crates/chips/wd1770", "crates/formats/dsk", "crates/formats/zx-tape", "crates/build-info"]
 
 # Same release profile as the retroclawd host.
 [profile.release]

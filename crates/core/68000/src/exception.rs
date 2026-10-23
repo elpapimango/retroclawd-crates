@@ -250,6 +250,8 @@ impl Cpu {
         self.set_sr(imm);
         self.pc = self.pc.wrapping_add(4);
         self.run = RunState::Stopped;
+        // UM Table 8-12: STOP is 4(0/0); the clocks that follow, while the CPU waits, are counted by `step`.
+        self.idle(4);
         let _ = bus;
         Ok(())
     }

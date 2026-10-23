@@ -120,8 +120,13 @@ impl Cpu {
 
     pub(crate) fn op_pea<B: M68kBus>(&mut self, bus: &mut B, op: u16) -> Result<(), Fault> {
         let a = self.control_address(bus, op)?;
-        self.push_long(bus, a)?;
-        self.prefetch_next(bus)
+        // The absolute modes push before the final fetch; the others after it (SingleStepTests).
+        if (op >> 3) & 7 == 7 && op & 7 <= 1 {
+            self.push_long(bus, a)?;
+            return self.prefetch_next(bus);
+        }
+        self.prefetch_next(bus)?;
+        self.push_long(bus, a)
     }
 
     pub(crate) fn push_long<B: M68kBus>(&mut self, bus: &mut B, v: u32) -> Result<(), Fault> {
@@ -136,12 +141,13 @@ impl Cpu {
         let dst = self.ea(bus, m, r, sz, false)?;
         if let Loc::Mem(_) = dst {
             self.read_loc(bus, dst, sz)?;
-        } else if sz == Sz::L {
-            self.idle(2);
+            self.set_logic_flags(0, sz);
+            self.prefetch_next(bus)?;
+            return self.write_loc_rmw(bus, dst, sz, 0);
         }
         self.set_logic_flags(0, sz);
         self.write_loc(bus, dst, sz, 0)?;
-        self.prefetch_next(bus)
+        self.prefetch_then_idle(bus, if sz == Sz::L { 2 } else { 0 })
     }
 
     pub(crate) fn op_tst<B: M68kBus>(&mut self, bus: &mut B, op: u16, sz: Sz) -> Result<(), Fault> {
@@ -169,8 +175,7 @@ impl Cpu {
                 self.set_an(y, dx);
             }
         }
-        self.idle(2);
-        self.prefetch_next(bus)
+        self.prefetch_then_idle(bus, 2)
     }
 
     pub(crate) fn op_swap<B: M68kBus>(&mut self, bus: &mut B, op: u16) -> Result<(), Fault> {

@@ -178,7 +178,9 @@ impl Cpu {
         self.run
     }
 
-    /// Drives IPL2-IPL0 (0 = no request, 7 = non-maskable).
+    /// Drives IPL2-IPL0 (0 = no request, 7 = non-maskable). The level is sampled once per `step`, before the
+    /// instruction's first fetch (UM 6.3.2: interrupts are recognised between instructions): the value set last
+    /// before the call decides, and a level raised and withdrawn again between two calls is never seen.
     pub fn set_ipl(&mut self, level: u8) {
         self.ipl = level & 7;
     }
@@ -412,6 +414,33 @@ impl Cpu {
     pub(crate) fn extension<B: M68kBus>(&mut self, bus: &mut B) -> Result<u16, Fault> {
         let word = self.prefetch[1];
         self.pc = self.pc.wrapping_add(2);
+        let fc = self.program_fc();
+        self.prefetch[1] =
+            self.bus_read(bus, self.pc.wrapping_add(2), Size::Word, fc, true)? as u16;
+        Ok(word)
+    }
+
+    /// The fetch that ends an instruction, then `n` internal clocks: an operation on registers reads the next word
+    /// first and finishes its arithmetic after it (SingleStepTests).
+    pub(crate) fn prefetch_then_idle<B: M68kBus>(
+        &mut self,
+        bus: &mut B,
+        n: u32,
+    ) -> Result<(), Fault> {
+        self.prefetch_next(bus)?;
+        self.idle(n);
+        Ok(())
+    }
+
+    /// Like `extension`, with `internal` clocks between taking the word and reading the next one.
+    pub(crate) fn extension_after<B: M68kBus>(
+        &mut self,
+        bus: &mut B,
+        internal: u32,
+    ) -> Result<u16, Fault> {
+        let word = self.prefetch[1];
+        self.pc = self.pc.wrapping_add(2);
+        self.idle(internal);
         let fc = self.program_fc();
         self.prefetch[1] =
             self.bus_read(bus, self.pc.wrapping_add(2), Size::Word, fc, true)? as u16;

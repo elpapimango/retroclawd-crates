@@ -76,8 +76,7 @@ impl Cpu {
         let r = (op & 7) as usize;
         let v = self.shift(kind, left, self.d[r], count, sz);
         self.d[r] = (self.d[r] & !sz.mask()) | v;
-        self.idle(2 * count + if sz == Sz::L { 4 } else { 2 });
-        self.prefetch_next(bus)
+        self.prefetch_then_idle(bus, 2 * count + if sz == Sz::L { 4 } else { 2 })
     }
 
     /// Memory form: one bit of a word.
