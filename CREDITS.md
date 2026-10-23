@@ -11,6 +11,23 @@ not from independent derivation.
 > are credited in `CREDITS.md` of `retroclawd-sinclair`, `retroclawd-amstrad` and
 > `retroclawd-commodore`.
 
+## MOS 6520 PIA (`crates/chips/pia-6520`)
+
+Register decoding, direction selection, asymmetric port A/B readback,
+edge-latched interrupt status, C1/C2 interrupt enable/polarity, C2
+handshake/pulse/manual outputs and reset behavior: Avery Lee's
+[Altirra Hardware Reference Manual](https://www.virtualdub.org/downloads/Altirra%20Hardware%20Reference%20Manual.pdf),
+2026-01-02, sections 2.5 and 14.5, pages 34-36 and 453-456.
+This is a fresh implementation of documented hardware behavior, not a
+translation of an emulator. Output-to-input spurious C2 interrupts follow
+section 2.5, "Spurious interrupts" (page 36); the handshake/pulse history
+distinction is checked against the MIT-licensed Acid800 1.2 `pia_irq.s`
+control-write sequences, not emulator implementation code. The new latent
+history uses a separate `PiaControlState` checkpoint to preserve the original
+serialized `Pia` layout; legacy restores start with empty history.
+Machine-specific wiring and analogue floating-input decay remain outside
+this implementation. These Chip tests do not establish an executed Acid800 pass.
+
 ## AY-3-8910 chip emulation (`crates/ay-3-8910`)
 
 The tone/noise/envelope generator algorithms and the 16-step logarithmic
@@ -124,6 +141,57 @@ opcodes retain the deterministic common-case formulas from the widely
 cited "NMOS 6510 Unintended Opcodes" reference by Groepaz/Hitmen. This is
 useful deterministic emulation, not a claim that temperature- and
 chip-dependent silicon behavior has one exact answer.
+
+Acid800 1.2 (Avery Lee, MIT; privately executed, not committed) exposed an
+incorrect SHY page-crossing store. SHY/SHX/SHA/TAS now mask with the
+**unindexed** base high byte plus one and replace the destination high byte
+with the masked data when indexing carries. Existing indexed dummy reads
+and cycle counts are preserved. Sources: Altirra Hardware Reference
+2026-01-02, chapter 3, and Atari800 7.2.1's independently implemented
+[`src/cpu.c`](https://github.com/atari800/atari800/blob/63a381884175e3cbfc745ff00dfb3d70d928eb50/src/cpu.c)
+opcodes `$93/$9B/$9C/$9E/$9F`. The latter explicitly selects high-byte-plus-one
+for SHA; the manual describes variant SHA masking and warns of instability.
+This is a specified deterministic common case, not a universal silicon claim.
+The regression covers the actual Acid800 SHY failure, all five opcodes,
+non-crossing and crossing stores, zero-page pointer wrap, 16-bit address
+wrap, unchanged flags/registers, TAS's stack update and exact final bus events.
+
+Acid800's CLI/SEI timing test also exposed the live-I interrupt check.
+The Core now retains I from before CLI, SEI and PLP for the next boundary;
+RTI's restored I applies immediately. Source: the same Altirra Hardware
+Reference, chapter 3, "Clearing/Setting the I flag with an interrupt pending".
+Focused bus tests cover delayed IRQ entry, pushed I, RTI and latch cleanup
+on reset, NMI and debugger status edits. No bus event or cycle is added.
+This fixes instruction-boundary mask sampling, not the full cycle-exact
+IRQ/NMI/BRK pipeline or taken-branch interrupt delay.
+
+The published `Cpu` serde bytes remain unchanged. Exact snapshots must store
+`Cpu::irq_poll_mask()` separately in their versioned machine envelope and
+restore it with `restore_irq_poll_mask`. Legacy states restore `None`,
+preserving their live-I boundary semantics because they contain no history.
+Atari 800 v3, VIC-20 v5 and the C64/C128/1541/1581 IRQ envelopes persist this
+latch, including nested drive checkpoints. Preserve old state files for
+rollback; old plugins cannot read the new machine envelopes.
+
+BRK/IRQ vector selection now permits a cycle-clocked Bus NMI edge to hijack
+the sequence after cycle 4, before the status push. Sources:
+[NESdev CPU interrupts, "Interrupt hijacking"](https://www.nesdev.org/wiki/CPU_interrupts#Interrupt_hijacking)
+(including the Visual6502-derived tick sequence), and Altirra Hardware
+Reference chapter 3, "Overlapping interrupts". Both stack frames and seven
+bus cycles remain unchanged: BRK still pushes PC+2 and B=1; IRQ pushes the
+interrupted PC and B=0. Tests place the edge after each of the seven cycles,
+checking vector reads, stack contents and retention of late edges.
+`Bus::take_nmi_edge` defaults to false, so existing instruction-boundary
+callers retain their behavior. No CPU field, serde layout or Plugin ABI
+changes. A connected Bus owns and persists unconsumed edges; Atari's existing
+Hardware State already does so. This is not a complete interrupt pipeline:
+consecutive-interrupt inhibition, detector latency and taken-branch timing
+remain outside this increment.
+
+The optional `Bus::interrupt_status_pushed` callback marks cycle 5 without
+adding a CPU field or clock. It lets Atari model the short ANTIC NMI pulse
+being lost when it overlaps interrupt acknowledgment (Altirra Hardware
+Reference section 4.8, "Missed NMIs"). Other buses retain the no-op default.
 
 ## uPD765A behaviour used by real CPC/+3 firmware (`crates/chips/nec765`, 2026-09-29)
 

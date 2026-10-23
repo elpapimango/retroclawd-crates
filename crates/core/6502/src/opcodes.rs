@@ -131,6 +131,18 @@ impl Cpu {
 
     // ---- Shared operation helpers -----------------------------------
 
+    fn store_high<B: Bus>(bus: &mut B, address: u16, index: u8, register: u8) {
+        let base = address.wrapping_sub(u16::from(index));
+        let value = register & ((base >> 8) as u8).wrapping_add(1);
+        // A page carry replaces the destination high byte with the masked data.
+        let target = if (base & 0xff00) != (address & 0xff00) {
+            (u16::from(value) << 8) | (address & 0xff)
+        } else {
+            address
+        };
+        bus.write(target, value);
+    }
+
     fn op_and(&mut self, v: u8) {
         self.a &= v;
         self.set_zn(self.a);
@@ -323,11 +335,13 @@ impl Cpu {
         bus.dummy_cycle(self.pc, false, 0);
         self.pc = self.pc.wrapping_add(1);
         self.push_u16(bus, self.pc);
+        let vector = Self::irq_vector(bus);
         self.push(bus, self.p | FLAG_U | FLAG_B);
+        bus.interrupt_status_pushed();
         self.p |= crate::cpu::FLAG_I;
         self.pc = {
-            let lo = bus.read(0xFFFE) as u16;
-            let hi = bus.read(0xFFFF) as u16;
+            let lo = bus.read(vector) as u16;
+            let hi = bus.read(vector + 1) as u16;
             lo | (hi << 8)
         };
         7
@@ -724,11 +738,11 @@ impl Cpu {
             // bus conditions) -- implemented per the deterministic
             // formula every reference agrees on as the *common* case; see
             // this file's top-level epistemic-tier note.
-            0x9C => { let (addr, _) = self.addr_absx(bus, true); let hi = (addr >> 8) as u8; let v = self.y & hi.wrapping_add(1); bus.write(addr, v); 5 }
-            0x9E => { let (addr, _) = self.addr_absy(bus, true); let hi = (addr >> 8) as u8; let v = self.x & hi.wrapping_add(1); bus.write(addr, v); 5 }
-            0x9F => { let (addr, _) = self.addr_absy(bus, true); let hi = (addr >> 8) as u8; let v = self.a & self.x & hi.wrapping_add(1); bus.write(addr, v); 5 }
-            0x93 => { let (addr, _) = self.addr_indy(bus, true); let hi = (addr >> 8) as u8; let v = self.a & self.x & hi.wrapping_add(1); bus.write(addr, v); 6 }
-            0x9B => { let (addr, _) = self.addr_absy(bus, true); self.sp = self.a & self.x; let hi = (addr >> 8) as u8; let v = self.sp & hi.wrapping_add(1); bus.write(addr, v); 5 }
+            0x9C => { let (addr, _) = self.addr_absx(bus, true); Self::store_high(bus, addr, self.x, self.y); 5 }
+            0x9E => { let (addr, _) = self.addr_absy(bus, true); Self::store_high(bus, addr, self.y, self.x); 5 }
+            0x9F => { let (addr, _) = self.addr_absy(bus, true); Self::store_high(bus, addr, self.y, self.a & self.x); 5 }
+            0x93 => { let (addr, _) = self.addr_indy(bus, true); Self::store_high(bus, addr, self.y, self.a & self.x); 6 }
+            0x9B => { let (addr, _) = self.addr_absy(bus, true); self.sp = self.a & self.x; Self::store_high(bus, addr, self.y, self.sp); 5 }
             0xBB => { let (addr, pc) = self.addr_absy(bus, false); let v = bus.read(addr) & self.sp; self.a = v; self.x = v; self.sp = v; self.set_zn(v); 4 + pc as u32 }
             // XAA/ANE #imm: real hardware computes `(A | magic) & X & imm`
             // where `magic` is a chip/temperature-dependent constant --

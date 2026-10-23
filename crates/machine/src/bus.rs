@@ -62,6 +62,22 @@ pub trait Bus {
     #[inline]
     fn dummy_cycle(&mut self, _addr: u16, _write: bool, _value: u8) {}
 
+    /// Consumes a latched non-maskable interrupt edge without advancing time.
+    /// A cycle-clocked bus can raise it during an instruction; the 6502 also
+    /// checks it before selecting the BRK/IRQ vector. Unconsumed edges must
+    /// survive until the next check, including across a machine State restore.
+    /// Buses using instruction-boundary CPU requests need no override.
+    #[inline]
+    fn take_nmi_edge(&mut self) -> bool {
+        false
+    }
+
+    /// Marks completion of the status write in a 6502 interrupt sequence.
+    /// A bus with a short NMI pulse can model its overlap with interrupt
+    /// acknowledgment here. This does not advance the bus clock.
+    #[inline]
+    fn interrupt_status_pushed(&mut self) {}
+
     /// Called by a CPU core's I/O funnel right after every `IN`
     /// (`write == false`, `value` is the byte the CPU received) and `OUT`
     /// (`write == true`, `value` is the byte it sent). The hook the

@@ -137,6 +137,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pia-6520"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "plugin-api"
 version = "0.1.0"
 dependencies = [

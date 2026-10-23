@@ -13,6 +13,17 @@ The shared crates of retroclawd (see README.md): `machine`, `plugin-api`, the `z
 
 ## Crate notes
 
+- **`pia-6520`** -- CPU-independent MOS 6520 PIA. `read`/`write` use
+  A/CRA/B/CRB ordering; `*_alt` swap the low address bits for Atari wiring.
+  `peek` never acknowledges interrupts or strobes outputs. Advance `tick`
+  with peripheral clocks for one-cycle C2 pulses. `pins` preserves distinct
+  port A/B readback; `drive` reports output/pull-up levels for external
+  banking logic. Validate deserialized state before committing a restore.
+  Save `PiaControlState` beside `Pia` for output-to-input C2 interrupt history;
+  validate the extension against the restored PIA before committing it.
+  Use `initialize_legacy_control` for legacy restores with empty history.
+  No analogue input decay.
+
 Written in the pre-split repository; mentions of `zx-spectrum`, `c64`, `retroclawd`'s GUI and similar refer to code that now lives in the application or machine repositories.
 
 - **`machine`** — `Machine` = per-computer trait (`clock_hz`, `frame_hz`,

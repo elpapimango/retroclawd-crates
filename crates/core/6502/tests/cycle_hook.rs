@@ -50,6 +50,164 @@ impl Bus for TraceBus {
 
 const CODE: u16 = 0x0200;
 
+#[test]
+fn nmi_hijacks_brk_and_irq_only_before_the_status_push() {
+    struct NmiBus {
+        trace: TraceBus,
+        edge_at: usize,
+        pending: bool,
+        status_push: usize,
+    }
+    impl NmiBus {
+        fn tick(&mut self) {
+            self.pending |= self.trace.events.len() == self.edge_at;
+        }
+    }
+    impl Bus for NmiBus {
+        fn read(&mut self, addr: u16) -> u8 {
+            let value = self.trace.read(addr);
+            self.tick();
+            value
+        }
+        fn write(&mut self, addr: u16, value: u8) {
+            self.trace.write(addr, value);
+            self.tick();
+        }
+        fn dummy_cycle(&mut self, addr: u16, write: bool, value: u8) {
+            self.trace.dummy_cycle(addr, write, value);
+            self.tick();
+        }
+        fn take_nmi_edge(&mut self) -> bool {
+            std::mem::take(&mut self.pending)
+        }
+        fn interrupt_status_pushed(&mut self) {
+            self.status_push = self.trace.events.len();
+        }
+    }
+    for brk in [true, false] {
+        for edge_at in 1..=7 {
+            let mut bus = NmiBus {
+                trace: TraceBus::new(0xea),
+                edge_at,
+                pending: false,
+                status_push: 0,
+            };
+            bus.trace.mem[CODE as usize] = 0x00;
+            bus.trace.mem[0xfffa..=0xfffb].copy_from_slice(&[0x00, 0x40]);
+            bus.trace.mem[0xfffe..=0xffff].copy_from_slice(&[0x00, 0x50]);
+            let mut cpu = Cpu::new();
+            cpu.pc = CODE;
+            cpu.p = 0x20;
+            if !brk {
+                cpu.request_irq();
+            }
+            assert_eq!(cpu.step(&mut bus), 7);
+            let hijacked = edge_at <= 4;
+            assert_eq!(
+                cpu.pc,
+                if hijacked { 0x4000 } else { 0x5000 },
+                "BRK={brk}, NMI after cycle {edge_at}"
+            );
+            assert_eq!(bus.trace.events.len(), 7);
+            assert_eq!(bus.status_push, 5);
+            assert_eq!(bus.trace.mem[0x01fd], 0x02);
+            assert_eq!(bus.trace.mem[0x01fc], if brk { 0x02 } else { 0x00 });
+            assert_eq!(bus.trace.mem[0x01fb], if brk { 0x30 } else { 0x20 });
+            let vector = if hijacked { 0xfffa } else { 0xfffe };
+            assert_eq!(
+                &bus.trace.events[5..],
+                &[Ev::Read(vector), Ev::Read(vector + 1)]
+            );
+            assert_eq!(bus.pending, !hijacked, "late NMI must remain pending");
+        }
+    }
+}
+
+#[test]
+fn irq_poll_uses_old_i_for_cli_sei_and_plp_but_restored_i_for_rti() {
+    for opcode in [0x58, 0x28] {
+        let mut bus = TraceBus::new(0xea);
+        bus.mem[CODE as usize] = opcode;
+        bus.mem[0x01fe] = 0x20;
+        bus.mem[0xfffe..=0xffff].copy_from_slice(&[0x00, 0x40]);
+        let mut cpu = Cpu::new();
+        cpu.pc = CODE;
+        cpu.request_irq();
+        cpu.step(&mut bus);
+        cpu.request_irq();
+        assert_eq!(cpu.step(&mut bus), 2, "opcode {opcode:02x} must defer IRQ");
+        assert_eq!(cpu.pc, CODE + 2);
+        cpu.request_irq();
+        bus.events.clear();
+        assert_eq!(cpu.step(&mut bus), 7);
+        assert_eq!(cpu.pc, 0x4000);
+        assert_eq!(bus.events.len(), 7);
+    }
+
+    for opcode in [0x78, 0x28] {
+        let mut bus = TraceBus::new(0xea);
+        bus.mem[CODE as usize..CODE as usize + 2].copy_from_slice(&[0x58, opcode]);
+        bus.mem[0x01fe] = 0x24;
+        bus.mem[0xfffe..=0xffff].copy_from_slice(&[0x00, 0x40]);
+        let mut cpu = Cpu::new();
+        cpu.pc = CODE;
+        cpu.request_irq();
+        cpu.step(&mut bus);
+        cpu.request_irq();
+        cpu.step(&mut bus);
+        assert_eq!(cpu.pc, CODE + 2, "CLI must allow SEI/PLP to execute");
+        cpu.request_irq();
+        assert_eq!(cpu.step(&mut bus), 7);
+        assert_eq!(cpu.pc, 0x4000);
+        assert_eq!(
+            bus.mem[0x0100 | cpu.sp.wrapping_add(1) as usize] & 0x14,
+            0x04
+        );
+    }
+
+    let mut bus = TraceBus::new(0xea);
+    bus.mem[CODE as usize] = 0x40;
+    bus.mem[0x01fe] = 0x20;
+    bus.mem[0x01ff] = 0x00;
+    bus.mem[0x0100] = 0x30;
+    bus.mem[0xfffe..=0xffff].copy_from_slice(&[0x00, 0x40]);
+    let mut cpu = Cpu::new();
+    cpu.pc = CODE;
+    cpu.request_irq();
+    assert_eq!(cpu.step(&mut bus), 6);
+    assert_eq!(cpu.pc, 0x3000);
+    cpu.request_irq();
+    assert_eq!(cpu.step(&mut bus), 7);
+    assert_eq!(cpu.pc, 0x4000);
+    assert_eq!(bus.mem[0x01fe] & 0x14, 0);
+}
+
+#[test]
+fn reset_nmi_and_status_edits_discard_a_previous_unmasked_irq_poll() {
+    for action in ["reset", "nmi", "P", "SR"] {
+        let mut bus = TraceBus::new(0xea);
+        bus.mem[CODE as usize] = 0x78;
+        let mut cpu = Cpu::new();
+        cpu.pc = CODE;
+        cpu.p = 0x20;
+        cpu.step(&mut bus);
+        match action {
+            "reset" => cpu.reset(&mut bus),
+            "nmi" => {
+                cpu.request_nmi();
+                assert_eq!(cpu.step(&mut bus), 7);
+            }
+            register => cpu.set_register(register, 0x24).unwrap(),
+        }
+        cpu.request_irq();
+        assert_eq!(
+            cpu.step(&mut bus),
+            2,
+            "{action} must use its current I flag"
+        );
+    }
+}
+
 /// Runs one instruction at `CODE` and returns (cycles, events).
 fn run(opcode: u8, fill: u8, xy: u8, p: u8, sp: u8) -> (u32, Vec<Ev>) {
     let mut bus = TraceBus::new(fill);
@@ -194,6 +352,53 @@ fn zero_page_indexing_reads_the_unindexed_byte() {
     cpu.x = 0x20;
     cpu.step(&mut bus);
     assert_eq!(&bus.events[2..], &[Ev::DummyRead(0x00F0), Ev::Read(0x0010)]);
+}
+
+#[test]
+fn high_byte_stores_mask_the_base_and_corrupt_the_write_address_on_carry() {
+    for opcode in [0x9c, 0x9e, 0x9f, 0x93, 0x9b] {
+        for (base, index, source, target, value) in [
+            (0x3fceu16, 0xffu8, 0xbfu8, 0x00cdu16, 0x00u8),
+            (0x3fce, 0xff, 0xff, 0x40cd, 0x40),
+            (0x12f0, 0x20, 0x01, 0x0110, 0x01),
+            (0x12e0, 0x1f, 0xbf, 0x12ff, 0x13),
+            (0xfff0, 0x20, 0xff, 0x0010, 0x00),
+        ] {
+            let mut bus = TraceBus::new(0xaa);
+            bus.mem[CODE as usize] = opcode;
+            if opcode == 0x93 {
+                bus.mem[CODE as usize + 1] = 0xff;
+                bus.mem[0xff] = base as u8;
+                bus.mem[0] = (base >> 8) as u8;
+            } else {
+                bus.mem[CODE as usize + 1..CODE as usize + 3].copy_from_slice(&base.to_le_bytes());
+            }
+            let mut cpu = Cpu::new();
+            cpu.pc = CODE;
+            cpu.a = 0xff;
+            cpu.x = if opcode == 0x9c { index } else { source };
+            cpu.y = if opcode == 0x9c { source } else { index };
+            cpu.p = 0xeb;
+            let cycles = cpu.step(&mut bus);
+            let indexed = base.wrapping_add(u16::from(index));
+            assert_eq!(
+                &bus.events[bus.events.len() - 2..],
+                &[
+                    Ev::DummyRead((base & 0xff00) | (indexed & 0xff)),
+                    Ev::Write(target, value),
+                ],
+                "opcode {opcode:02x}, base {base:04x}, index {index:02x}, source {source:02x}"
+            );
+            assert_eq!(cycles, if opcode == 0x93 { 6 } else { 5 });
+            assert_eq!(bus.events.len() as u32, cycles);
+            assert_eq!(bus.mem[usize::from(target)], value);
+            assert_eq!(cpu.a, 0xff);
+            assert_eq!(cpu.x, if opcode == 0x9c { index } else { source });
+            assert_eq!(cpu.y, if opcode == 0x9c { source } else { index });
+            assert_eq!(cpu.p, 0xeb);
+            assert_eq!(cpu.sp, if opcode == 0x9b { source } else { 0xfd });
+        }
+    }
 }
 
 #[test]
